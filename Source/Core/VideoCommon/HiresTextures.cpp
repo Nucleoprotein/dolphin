@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 #include <xxhash.h>
+#include <inttypes.h>
 
 #include <fmt/format.h>
 
@@ -273,7 +274,7 @@ std::string HiresTexture::GenBaseName(const u8* texture, size_t texture_size, co
   //                                                          has_mipmaps ? "_m" : "", tex_hash);
 
   std::string basename =
-      s_format_prefix + StringFromFormat("%dx%d%s", width, height, has_mipmaps ? "_m" : "");
+    std::string(s_format_prefix) + StringFromFormat("%dx%d%s", width, height, has_mipmaps ? "_m" : "");
 
   // RESHDP Hack - Separate the texname from the basename
   std::string texname = StringFromFormat("_%016" PRIx64, tex_hash);
@@ -283,7 +284,7 @@ std::string HiresTexture::GenBaseName(const u8* texture, size_t texture_size, co
 
   ReThreeMaskHack(texname, tlutname, width);
 
-  std::string fullname = basename + texname + tlutname + formatname;
+  std::string full_name = basename + texname + tlutname + formatname;
 
   // RESHDP Hack - Display the room id in the OSD. Critical for debugging the pack.
   // ReThreeRoomIdOsd(fullname, width);
