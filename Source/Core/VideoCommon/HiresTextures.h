@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -60,7 +61,7 @@ private:
   static bool LoadTexture(Level& level, const std::vector<u8>& buffer);
   static void Prefetch();
 
-  static std::string GetTextureDirectory(const std::string& game_id);
+  static std::set<std::string> GetTextureDirectories(const std::string& game_id);
 
   static void ReThreeMaskHack(const std::string& texname, std::string& tlutname, u32 width);
   static void ReThreeMaskHackInit();

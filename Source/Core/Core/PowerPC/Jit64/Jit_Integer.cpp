@@ -12,6 +12,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/MathUtil.h"
 #include "Common/x64Emitter.h"
+#include "Core/CoreTiming.h"
 #include "Core/PowerPC/Jit64/Jit.h"
 #include "Core/PowerPC/Jit64/RegCache/JitRegCache.h"
 #include "Core/PowerPC/Jit64Common/Jit64PowerPCState.h"
@@ -361,7 +362,15 @@ void Jit64::DoMergedBranch()
   // Code that handles successful PPC branching.
   const UGeckoInstruction& next = js.op[1].inst;
   const u32 nextPC = js.op[1].address;
-  if (next.OPCD == 16)  // bcx
+
+  if (js.op[1].branchIsIdleLoop)
+  {
+    if (next.LK)
+      MOV(32, PPCSTATE(spr[SPR_LR]), Imm32(nextPC + 4));
+
+    WriteIdleExit(js.op[1].branchTo);
+  }
+  else if (next.OPCD == 16)  // bcx
   {
     if (next.LK)
       MOV(32, PPCSTATE(spr[SPR_LR]), Imm32(nextPC + 4));
@@ -1321,18 +1330,29 @@ void Jit64::addx(UGeckoInstruction inst)
     RCX64Reg Rd = gpr.Bind(d, RCMode::Write);
     RegCache::Realize(Ra, Rb, Rd);
 
-    if (Ra.IsSimpleReg() && Rb.IsSimpleReg() && !inst.OE)
+    if (d == a)
     {
-      LEA(32, Rd, MRegSum(Ra.GetSimpleReg(), Rb.GetSimpleReg()));
+      ADD(32, Rd, Rb);
     }
     else if (d == b)
     {
       ADD(32, Rd, Ra);
     }
+    else if (Ra.IsSimpleReg() && Rb.IsSimpleReg() && !inst.OE)
+    {
+      LEA(32, Rd, MRegSum(Ra.GetSimpleReg(), Rb.GetSimpleReg()));
+    }
+    else if (Ra.IsSimpleReg() && Rb.IsImm() && !inst.OE)
+    {
+      LEA(32, Rd, MDisp(Ra.GetSimpleReg(), Rb.SImm32()));
+    }
+    else if (Rb.IsSimpleReg() && Ra.IsImm() && !inst.OE)
+    {
+      LEA(32, Rd, MDisp(Rb.GetSimpleReg(), Ra.SImm32()));
+    }
     else
     {
-      if (d != a)
-        MOV(32, Rd, Ra);
+      MOV(32, Rd, Ra);
       ADD(32, Rd, Rb);
     }
     if (inst.OE)

@@ -7,17 +7,18 @@
 #include <algorithm>
 #include <cassert>
 #include <memory>
+#include <string_view>
 
-#include "Common/BitUtils.h"
-#include "Common/ChunkFile.h"
+#include <fmt/format.h>
+
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 #include "Common/MsgHandler.h"
 
 #include "Core/Config/SYSCONFSettings.h"
-#include "Core/Config/WiimoteInputSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/Wiimote.h"
@@ -27,10 +28,13 @@
 #include "Core/HW/WiimoteCommon/WiimoteConstants.h"
 #include "Core/HW/WiimoteCommon/WiimoteHid.h"
 #include "Core/HW/WiimoteEmu/Extension/Classic.h"
+#include "Core/HW/WiimoteEmu/Extension/DrawsomeTablet.h"
 #include "Core/HW/WiimoteEmu/Extension/Drums.h"
 #include "Core/HW/WiimoteEmu/Extension/Guitar.h"
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
+#include "Core/HW/WiimoteEmu/Extension/TaTaCon.h"
 #include "Core/HW/WiimoteEmu/Extension/Turntable.h"
+#include "Core/HW/WiimoteEmu/Extension/UDrawTablet.h"
 
 #include "InputCommon/ControllerEmu/Control/Input.h"
 #include "InputCommon/ControllerEmu/Control/Output.h"
@@ -39,10 +43,11 @@
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Cursor.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Force.h"
+#include "InputCommon/ControllerEmu/ControlGroup/IMUAccelerometer.h"
+#include "InputCommon/ControllerEmu/ControlGroup/IMUCursor.h"
+#include "InputCommon/ControllerEmu/ControlGroup/IMUGyroscope.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ModifySettingsButton.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Tilt.h"
-#include "InputCommon/ControllerEmu/Setting/BooleanSetting.h"
-#include "InputCommon/ControllerEmu/Setting/NumericSetting.h"
 
 namespace WiimoteEmu
 {
@@ -58,7 +63,7 @@ static const u16 dpad_bitmasks[] = {Wiimote::PAD_UP, Wiimote::PAD_DOWN, Wiimote:
 static const u16 dpad_sideways_bitmasks[] = {Wiimote::PAD_RIGHT, Wiimote::PAD_LEFT, Wiimote::PAD_UP,
                                              Wiimote::PAD_DOWN};
 
-static const char* const named_buttons[] = {
+constexpr std::array<std::string_view, 7> named_buttons{
     "A", "B", "1", "2", "-", "+", "Home",
 };
 
@@ -74,33 +79,86 @@ void Wiimote::Reset()
   m_speaker_mute = false;
 
   // EEPROM
+  std::string eeprom_file = (File::GetUserPath(D_SESSION_WIIROOT_IDX) + "/" + GetName() + ".bin");
+  if (m_eeprom_dirty)
+  {
+    // Write out existing EEPROM
+    INFO_LOG(WIIMOTE, "Wrote EEPROM for %s", GetName().c_str());
+    std::ofstream file;
+    File::OpenFStream(file, eeprom_file, std::ios::binary | std::ios::out);
+    file.write(reinterpret_cast<char*>(m_eeprom.data.data()), EEPROM_FREE_SIZE);
+    file.close();
+
+    m_eeprom_dirty = false;
+  }
   m_eeprom = {};
 
-  // IR calibration and maybe more unknown purposes:
-  // The meaning of this data needs more investigation.
-  // Last byte is a checksum.
-  std::array<u8, 11> ir_calibration = {
-      0xA1, 0xAA, 0x8B, 0x99, 0xAE, 0x9E, 0x78, 0x30, 0xA7, 0x74, 0x00,
-  };
-  // Purposely not updating checksum because using this data results in a weird IR offset..
-  // UpdateCalibrationDataChecksum(ir_calibration, 1);
-  m_eeprom.ir_calibration_1 = ir_calibration;
-  m_eeprom.ir_calibration_2 = ir_calibration;
+  if (File::Exists(eeprom_file))
+  {
+    // Read existing EEPROM
+    std::ifstream file;
+    File::OpenFStream(file, eeprom_file, std::ios::binary | std::ios::in);
+    file.read(reinterpret_cast<char*>(m_eeprom.data.data()), EEPROM_FREE_SIZE);
+    file.close();
+  }
+  else
+  {
+    // Load some default data.
 
-  // Accel calibration:
-  // Last byte is a checksum.
-  std::array<u8, 10> accel_calibration = {
-      ACCEL_ZERO_G, ACCEL_ZERO_G, ACCEL_ZERO_G, 0, ACCEL_ONE_G, ACCEL_ONE_G, ACCEL_ONE_G, 0, 0, 0,
-  };
-  UpdateCalibrationDataChecksum(accel_calibration, 1);
-  m_eeprom.accel_calibration_1 = accel_calibration;
-  m_eeprom.accel_calibration_2 = accel_calibration;
+    // IR calibration:
+    std::array<u8, 11> ir_calibration = {
+        // Point 1
+        IR_LOW_X & 0xFF,
+        IR_LOW_Y & 0xFF,
+        // Mix
+        ((IR_LOW_Y & 0x300) >> 2) | ((IR_LOW_X & 0x300) >> 4) | ((IR_LOW_Y & 0x300) >> 6) |
+            ((IR_HIGH_X & 0x300) >> 8),
+        // Point 2
+        IR_HIGH_X & 0xFF,
+        IR_LOW_Y & 0xFF,
+        // Point 3
+        IR_HIGH_X & 0xFF,
+        IR_HIGH_Y & 0xFF,
+        // Mix
+        ((IR_HIGH_Y & 0x300) >> 2) | ((IR_HIGH_X & 0x300) >> 4) | ((IR_HIGH_Y & 0x300) >> 6) |
+            ((IR_LOW_X & 0x300) >> 8),
+        // Point 4
+        IR_LOW_X & 0xFF,
+        IR_HIGH_Y & 0xFF,
+        // Checksum
+        0x00,
+    };
+    UpdateCalibrationDataChecksum(ir_calibration, 1);
+    m_eeprom.ir_calibration_1 = ir_calibration;
+    m_eeprom.ir_calibration_2 = ir_calibration;
 
-  // Data of unknown purpose:
-  constexpr std::array<u8, 24> EEPROM_DATA_16D0 = {0x00, 0x00, 0x00, 0xFF, 0x11, 0xEE, 0x00, 0x00,
-                                                   0x33, 0xCC, 0x44, 0xBB, 0x00, 0x00, 0x66, 0x99,
-                                                   0x77, 0x88, 0x00, 0x00, 0x2B, 0x01, 0xE8, 0x13};
-  m_eeprom.unk_2 = EEPROM_DATA_16D0;
+    // Accel calibration:
+    // Last byte is a checksum.
+    std::array<u8, 10> accel_calibration = {
+        ACCEL_ZERO_G, ACCEL_ZERO_G, ACCEL_ZERO_G, 0, ACCEL_ONE_G, ACCEL_ONE_G, ACCEL_ONE_G, 0, 0, 0,
+    };
+    UpdateCalibrationDataChecksum(accel_calibration, 1);
+    m_eeprom.accel_calibration_1 = accel_calibration;
+    m_eeprom.accel_calibration_2 = accel_calibration;
+
+    // TODO: Is this needed?
+    // Data of unknown purpose:
+    constexpr std::array<u8, 24> EEPROM_DATA_16D0 = {
+        0x00, 0x00, 0x00, 0xFF, 0x11, 0xEE, 0x00, 0x00, 0x33, 0xCC, 0x44, 0xBB,
+        0x00, 0x00, 0x66, 0x99, 0x77, 0x88, 0x00, 0x00, 0x2B, 0x01, 0xE8, 0x13};
+    m_eeprom.unk_2 = EEPROM_DATA_16D0;
+
+    std::string mii_file = File::GetUserPath(D_SESSION_WIIROOT_IDX) + "/mii.bin";
+    if (File::Exists(mii_file))
+    {
+      // Import from the existing mii.bin file, if present
+      std::ifstream file;
+      File::OpenFStream(file, mii_file, std::ios::binary | std::ios::in);
+      file.read(reinterpret_cast<char*>(m_eeprom.mii_data_1.data()), m_eeprom.mii_data_1.size());
+      m_eeprom.mii_data_2 = m_eeprom.mii_data_1;
+      file.close();
+    }
+  }
 
   m_read_request = {};
 
@@ -109,85 +167,58 @@ void Wiimote::Reset()
   m_i2c_bus.AddSlave(&m_speaker_logic);
   m_i2c_bus.AddSlave(&m_camera_logic);
 
-  // Reset extension connections:
+  // Reset extension connections to NONE:
   m_is_motion_plus_attached = false;
   m_active_extension = ExtensionNumber::NONE;
   m_extension_port.AttachExtension(GetNoneExtension());
   m_motion_plus.GetExtPort().AttachExtension(GetNoneExtension());
 
   // Switch to desired M+ status and extension (if any).
+  // M+ and EXT are reset on attachment.
   HandleExtensionSwap();
 
-  // Reset sub-devices:
+  // Reset sub-devices.
   m_speaker_logic.Reset();
   m_camera_logic.Reset();
-  m_motion_plus.Reset();
-  GetActiveExtension()->Reset();
 
   m_status = {};
-  // TODO: This will suppress a status report on connect when an extension is already attached.
-  // I am not 100% sure if this is proper.
+  // This will suppress a status report on connect when an extension is already attached.
+  // TODO: I am not 100% sure if this is proper.
   m_status.extension = m_extension_port.IsDeviceConnected();
 
   // Dynamics:
   m_swing_state = {};
   m_tilt_state = {};
+  m_cursor_state = {};
+  m_shake_state = {};
 
-  m_shake_step = {};
-  m_shake_soft_step = {};
-  m_shake_hard_step = {};
-  m_shake_dynamic_data = {};
+  m_imu_cursor_state = {};
 }
 
 Wiimote::Wiimote(const unsigned int index) : m_index(index)
 {
-  // buttons
+  // Buttons
   groups.emplace_back(m_buttons = new ControllerEmu::Buttons(_trans("Buttons")));
-  for (const char* named_button : named_buttons)
+  for (auto& named_button : named_buttons)
   {
-    const std::string& ui_name = (named_button == std::string("Home")) ? "HOME" : named_button;
-    m_buttons->controls.emplace_back(
-        new ControllerEmu::Input(ControllerEmu::DoNotTranslate, named_button, ui_name));
+    std::string_view ui_name = (named_button == "Home") ? "HOME" : named_button;
+    m_buttons->AddInput(ControllerEmu::DoNotTranslate, std::string(named_button),
+                        std::string(ui_name));
   }
 
-  // ir
-  // i18n: IR stands for infrared and refers to the pointer functionality of Wii Remotes
-  groups.emplace_back(m_ir = new ControllerEmu::Cursor(_trans("IR")));
-
-  // swing
+  // Pointing (IR)
+  // i18n: "Point" refers to the action of pointing a Wii Remote.
+  groups.emplace_back(m_ir = new ControllerEmu::Cursor("IR", _trans("Point")));
   groups.emplace_back(m_swing = new ControllerEmu::Force(_trans("Swing")));
-
-  // tilt
   groups.emplace_back(m_tilt = new ControllerEmu::Tilt(_trans("Tilt")));
+  groups.emplace_back(m_shake = new ControllerEmu::Shake(_trans("Shake")));
+  groups.emplace_back(m_imu_accelerometer = new ControllerEmu::IMUAccelerometer(
+                          "IMUAccelerometer", _trans("Accelerometer")));
+  groups.emplace_back(m_imu_gyroscope =
+                          new ControllerEmu::IMUGyroscope("IMUGyroscope", _trans("Gyroscope")));
+  groups.emplace_back(m_imu_ir = new ControllerEmu::IMUCursor("IMUIR", _trans("Point")));
 
-  // shake
-  groups.emplace_back(m_shake = new ControllerEmu::Buttons(_trans("Shake")));
-  // i18n: Refers to a 3D axis (used when mapping motion controls)
-  m_shake->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::Translate, _trans("X")));
-  // i18n: Refers to a 3D axis (used when mapping motion controls)
-  m_shake->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::Translate, _trans("Y")));
-  // i18n: Refers to a 3D axis (used when mapping motion controls)
-  m_shake->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::Translate, _trans("Z")));
-
-  groups.emplace_back(m_shake_soft = new ControllerEmu::Buttons("ShakeSoft"));
-  m_shake_soft->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "X"));
-  m_shake_soft->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "Y"));
-  m_shake_soft->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "Z"));
-
-  groups.emplace_back(m_shake_hard = new ControllerEmu::Buttons("ShakeHard"));
-  m_shake_hard->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "X"));
-  m_shake_hard->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "Y"));
-  m_shake_hard->controls.emplace_back(new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "Z"));
-
-  groups.emplace_back(m_shake_dynamic = new ControllerEmu::Buttons("Shake Dynamic"));
-  m_shake_dynamic->controls.emplace_back(
-      new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "X"));
-  m_shake_dynamic->controls.emplace_back(
-      new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "Y"));
-  m_shake_dynamic->controls.emplace_back(
-      new ControllerEmu::Input(ControllerEmu::DoNotTranslate, "Z"));
-
-  // extension
+  // Extension
   groups.emplace_back(m_attachments = new ControllerEmu::Attachments(_trans("Extension")));
   m_attachments->AddAttachment(std::make_unique<WiimoteEmu::None>());
   m_attachments->AddAttachment(std::make_unique<WiimoteEmu::Nunchuk>());
@@ -195,45 +226,48 @@ Wiimote::Wiimote(const unsigned int index) : m_index(index)
   m_attachments->AddAttachment(std::make_unique<WiimoteEmu::Guitar>());
   m_attachments->AddAttachment(std::make_unique<WiimoteEmu::Drums>());
   m_attachments->AddAttachment(std::make_unique<WiimoteEmu::Turntable>());
+  m_attachments->AddAttachment(std::make_unique<WiimoteEmu::UDrawTablet>());
+  m_attachments->AddAttachment(std::make_unique<WiimoteEmu::DrawsomeTablet>());
+  m_attachments->AddAttachment(std::make_unique<WiimoteEmu::TaTaCon>());
 
-  // rumble
+  m_attachments->AddSetting(&m_motion_plus_setting, {_trans("Attach MotionPlus")}, true);
+
+  // Rumble
   groups.emplace_back(m_rumble = new ControllerEmu::ControlGroup(_trans("Rumble")));
-  m_rumble->controls.emplace_back(
-      m_motor = new ControllerEmu::Output(ControllerEmu::Translate, _trans("Motor")));
+  m_rumble->AddOutput(ControllerEmu::Translate, _trans("Motor"));
 
-  // dpad
+  // D-Pad
   groups.emplace_back(m_dpad = new ControllerEmu::Buttons(_trans("D-Pad")));
   for (const char* named_direction : named_directions)
   {
-    m_dpad->controls.emplace_back(
-        new ControllerEmu::Input(ControllerEmu::Translate, named_direction));
+    m_dpad->AddInput(ControllerEmu::Translate, named_direction);
   }
 
-  // options
+  // Options
   groups.emplace_back(m_options = new ControllerEmu::ControlGroup(_trans("Options")));
 
-  // m_options->boolean_settings.emplace_back(
-  //    m_motion_plus_setting =
-  //        new ControllerEmu::BooleanSetting("Attach MotionPlus", _trans("Attach MotionPlus"),
-  //        true,
-  //                                          ControllerEmu::SettingType::NORMAL, false));
+  m_options->AddSetting(&m_speaker_pan_setting,
+                        {_trans("Speaker Pan"),
+                         // i18n: The percent symbol.
+                         _trans("%")},
+                        0, -100, 100);
 
-  m_options->boolean_settings.emplace_back(
-      new ControllerEmu::BooleanSetting("Forward Wiimote", _trans("Forward Wii Remote"), true,
-                                        ControllerEmu::SettingType::NORMAL, true));
-  m_options->boolean_settings.emplace_back(m_upright_setting = new ControllerEmu::BooleanSetting(
-                                               "Upright Wiimote", _trans("Upright Wii Remote"),
-                                               false, ControllerEmu::SettingType::NORMAL, true));
-  m_options->boolean_settings.emplace_back(m_sideways_setting = new ControllerEmu::BooleanSetting(
-                                               "Sideways Wiimote", _trans("Sideways Wii Remote"),
-                                               false, ControllerEmu::SettingType::NORMAL, true));
+  m_options->AddSetting(&m_battery_setting,
+                        {_trans("Battery"),
+                         // i18n: The percent symbol.
+                         _trans("%")},
+                        95, 0, 100);
 
-  m_options->numeric_settings.emplace_back(
-      std::make_unique<ControllerEmu::NumericSetting>(_trans("Speaker Pan"), 0, -100, 100));
-  m_options->numeric_settings.emplace_back(
-      m_battery_setting = new ControllerEmu::NumericSetting(_trans("Battery"), 95.0 / 100, 0, 100));
+  // Note: "Upright" and "Sideways" options can be enabled at the same time which produces an
+  // orientation where the wiimote points towards the left with the buttons towards you.
+  m_options->AddSetting(&m_upright_setting,
+                        {"Upright Wiimote", nullptr, nullptr, _trans("Upright Wii Remote")}, false);
 
-  // hotkeys
+  m_options->AddSetting(&m_sideways_setting,
+                        {"Sideways Wiimote", nullptr, nullptr, _trans("Sideways Wii Remote")},
+                        false);
+
+  // Hotkeys
   groups.emplace_back(m_hotkeys = new ControllerEmu::ModifySettingsButton(_trans("Hotkeys")));
   // hotkeys to temporarily modify the Wii Remote orientation (sideways, upright)
   // this setting modifier is toggled
@@ -248,7 +282,9 @@ Wiimote::Wiimote(const unsigned int index) : m_index(index)
 
 std::string Wiimote::GetName() const
 {
-  return StringFromFormat("Wiimote%d", 1 + m_index);
+  if (m_index == WIIMOTE_BALANCE_BOARD)
+    return "BalanceBoard";
+  return fmt::format("Wiimote{}", 1 + m_index);
 }
 
 ControllerEmu::ControlGroup* Wiimote::GetWiimoteGroup(WiimoteGroup group)
@@ -261,7 +297,7 @@ ControllerEmu::ControlGroup* Wiimote::GetWiimoteGroup(WiimoteGroup group)
     return m_dpad;
   case WiimoteGroup::Shake:
     return m_shake;
-  case WiimoteGroup::IR:
+  case WiimoteGroup::Point:
     return m_ir;
   case WiimoteGroup::Tilt:
     return m_tilt;
@@ -275,6 +311,12 @@ ControllerEmu::ControlGroup* Wiimote::GetWiimoteGroup(WiimoteGroup group)
     return m_options;
   case WiimoteGroup::Hotkeys:
     return m_hotkeys;
+  case WiimoteGroup::IMUAccelerometer:
+    return m_imu_accelerometer;
+  case WiimoteGroup::IMUGyroscope:
+    return m_imu_gyroscope;
+  case WiimoteGroup::IMUPoint:
+    return m_imu_ir;
   default:
     assert(false);
     return nullptr;
@@ -312,6 +354,26 @@ ControllerEmu::ControlGroup* Wiimote::GetTurntableGroup(TurntableGroup group)
       ->GetGroup(group);
 }
 
+ControllerEmu::ControlGroup* Wiimote::GetUDrawTabletGroup(UDrawTabletGroup group)
+{
+  return static_cast<UDrawTablet*>(
+             m_attachments->GetAttachmentList()[ExtensionNumber::UDRAW_TABLET].get())
+      ->GetGroup(group);
+}
+
+ControllerEmu::ControlGroup* Wiimote::GetDrawsomeTabletGroup(DrawsomeTabletGroup group)
+{
+  return static_cast<DrawsomeTablet*>(
+             m_attachments->GetAttachmentList()[ExtensionNumber::DRAWSOME_TABLET].get())
+      ->GetGroup(group);
+}
+
+ControllerEmu::ControlGroup* Wiimote::GetTaTaConGroup(TaTaConGroup group)
+{
+  return static_cast<TaTaCon*>(m_attachments->GetAttachmentList()[ExtensionNumber::TATACON].get())
+      ->GetGroup(group);
+}
+
 bool Wiimote::ProcessExtensionPortEvent()
 {
   // WiiBrew: Following a connection or disconnection event on the Extension Port,
@@ -339,6 +401,7 @@ void Wiimote::UpdateButtonsStatus()
   m_dpad->GetState(&m_status.buttons.hex, IsSideways() ? dpad_sideways_bitmasks : dpad_bitmasks);
 }
 
+// This is called every ::Wiimote::UPDATE_FREQ (200hz)
 void Wiimote::Update()
 {
   // Check if connected.
@@ -351,6 +414,7 @@ void Wiimote::Update()
   // Data is later accessed in IsSideways and IsUpright
   m_hotkeys->GetState();
 
+  // Update our motion simulations.
   StepDynamics();
 
   // Update buttons in the status struct which is sent in 99% of input reports.
@@ -363,10 +427,22 @@ void Wiimote::Update()
   // If a new extension is requested in the GUI the change will happen here.
   HandleExtensionSwap();
 
+  // Allow extension to perform any regular duties it may need.
+  // (e.g. Nunchuk motion simulation step)
+  // Input is prepared here too.
+  // TODO: Separate input preparation from Update.
+  GetActiveExtension()->Update();
+
+  if (m_is_motion_plus_attached)
+  {
+    // M+ has some internal state that must processed.
+    m_motion_plus.Update();
+  }
+
   // Returns true if a report was sent.
   if (ProcessExtensionPortEvent())
   {
-    // Extension port event occured.
+    // Extension port event occurred.
     // Don't send any other reports.
     return;
   }
@@ -424,30 +500,46 @@ void Wiimote::SendDataReport()
     if (rpt_builder.HasAccel())
     {
       // Calibration values are 8-bit but we want 10-bit precision, so << 2.
-      DataReportBuilder::AccelData accel =
-          ConvertAccelData(GetAcceleration(), ACCEL_ZERO_G << 2, ACCEL_ONE_G << 2);
+      AccelData accel =
+          ConvertAccelData(GetTotalAcceleration(), ACCEL_ZERO_G << 2, ACCEL_ONE_G << 2);
       rpt_builder.SetAccelData(accel);
     }
 
     // IR Camera:
     if (rpt_builder.HasIR())
     {
-      m_camera_logic.Update(GetTransformation());
+      // Note: Camera logic currently contains no changing state so we can just update it here.
+      // If that changes this should be moved to Wiimote::Update();
+      m_camera_logic.Update(GetTotalTransformation());
 
       // The real wiimote reads camera data from the i2c bus starting at offset 0x37:
       const u8 camera_data_offset =
           CameraLogic::REPORT_DATA_OFFSET + rpt_builder.GetIRDataFormatOffset();
 
-      m_i2c_bus.BusRead(CameraLogic::I2C_ADDR, camera_data_offset, rpt_builder.GetIRDataSize(),
-                        rpt_builder.GetIRDataPtr());
+      u8* ir_data = rpt_builder.GetIRDataPtr();
+      const u8 ir_size = rpt_builder.GetIRDataSize();
+
+      if (ir_size != m_i2c_bus.BusRead(CameraLogic::I2C_ADDR, camera_data_offset, ir_size, ir_data))
+      {
+        // This happens when IR reporting is enabled but the camera hardware is disabled.
+        // It commonly occurs when changing IR sensitivity.
+        std::fill_n(ir_data, ir_size, u8(0xff));
+      }
     }
 
     // Extension port:
     if (rpt_builder.HasExt())
     {
-      // Update extension first as motion-plus may read from it.
-      GetActiveExtension()->Update();
-      m_motion_plus.Update();
+      // Prepare extension input first as motion-plus may read from it.
+      // This currently happens in Wiimote::Update();
+      // TODO: Separate extension input data preparation from Update.
+      // GetActiveExtension()->PrepareInput();
+
+      if (m_is_motion_plus_attached)
+      {
+        // TODO: Make input preparation triggered by bus read.
+        m_motion_plus.PrepareInput(GetTotalAngularVelocity());
+      }
 
       u8* ext_data = rpt_builder.GetExtDataPtr();
       const u8 ext_size = rpt_builder.GetExtDataSize();
@@ -456,7 +548,7 @@ void Wiimote::SendDataReport()
                                         ExtensionPort::REPORT_I2C_ADDR, ext_size, ext_data))
       {
         // Real wiimote seems to fill with 0xff on failed bus read
-        std::fill_n(ext_data, ext_size, 0xff);
+        std::fill_n(ext_data, ext_size, u8(0xff));
       }
     }
 
@@ -487,7 +579,7 @@ void Wiimote::SendDataReport()
 void Wiimote::ControlChannel(const u16 channel_id, const void* data, u32 size)
 {
   // Check for custom communication
-  if (99 == channel_id)
+  if (channel_id == ::Wiimote::DOLPHIN_DISCONNET_CONTROL_CHANNEL)
   {
     // Wii Remote disconnected.
     Reset();
@@ -600,10 +692,10 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
   // B
   m_buttons->SetControlExpression(1, "Click 1");
 #endif
-  m_buttons->SetControlExpression(2, "1");  // 1
-  m_buttons->SetControlExpression(3, "2");  // 2
-  m_buttons->SetControlExpression(4, "Q");  // -
-  m_buttons->SetControlExpression(5, "E");  // +
+  m_buttons->SetControlExpression(2, "`1`");  // 1
+  m_buttons->SetControlExpression(3, "`2`");  // 2
+  m_buttons->SetControlExpression(4, "Q");    // -
+  m_buttons->SetControlExpression(5, "E");    // +
 
 #ifdef _WIN32
   m_buttons->SetControlExpression(6, "!LMENU & RETURN");  // Home
@@ -615,7 +707,7 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
   for (int i = 0; i < 3; ++i)
     m_shake->SetControlExpression(i, "Click 2");
 
-  // IR
+  // Pointing (IR)
   m_ir->SetControlExpression(0, "Cursor Y-");
   m_ir->SetControlExpression(1, "Cursor Y+");
   m_ir->SetControlExpression(2, "Cursor X-");
@@ -638,6 +730,20 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
   m_dpad->SetControlExpression(2, "Left");   // Left
   m_dpad->SetControlExpression(3, "Right");  // Right
 #endif
+
+  // Motion Source
+  m_imu_accelerometer->SetControlExpression(0, "Accel Up");
+  m_imu_accelerometer->SetControlExpression(1, "Accel Down");
+  m_imu_accelerometer->SetControlExpression(2, "Accel Left");
+  m_imu_accelerometer->SetControlExpression(3, "Accel Right");
+  m_imu_accelerometer->SetControlExpression(4, "Accel Forward");
+  m_imu_accelerometer->SetControlExpression(5, "Accel Backward");
+  m_imu_gyroscope->SetControlExpression(0, "Gyro Pitch Up");
+  m_imu_gyroscope->SetControlExpression(1, "Gyro Pitch Down");
+  m_imu_gyroscope->SetControlExpression(2, "Gyro Roll Left");
+  m_imu_gyroscope->SetControlExpression(3, "Gyro Roll Right");
+  m_imu_gyroscope->SetControlExpression(4, "Gyro Yaw Left");
+  m_imu_gyroscope->SetControlExpression(5, "Gyro Yaw Right");
 
   // Enable Nunchuk:
   constexpr ExtensionNumber DEFAULT_EXT = ExtensionNumber::NUNCHUK;
@@ -667,79 +773,90 @@ bool Wiimote::IsSideways() const
 {
   const bool sideways_modifier_toggle = m_hotkeys->getSettingsModifier()[0];
   const bool sideways_modifier_switch = m_hotkeys->getSettingsModifier()[2];
-  return m_sideways_setting->GetValue() ^ sideways_modifier_toggle ^ sideways_modifier_switch;
+  return m_sideways_setting.GetValue() ^ sideways_modifier_toggle ^ sideways_modifier_switch;
 }
 
 bool Wiimote::IsUpright() const
 {
   const bool upright_modifier_toggle = m_hotkeys->getSettingsModifier()[1];
   const bool upright_modifier_switch = m_hotkeys->getSettingsModifier()[3];
-  return m_upright_setting->GetValue() ^ upright_modifier_toggle ^ upright_modifier_switch;
+  return m_upright_setting.GetValue() ^ upright_modifier_toggle ^ upright_modifier_switch;
 }
 
 void Wiimote::SetRumble(bool on)
 {
   const auto lock = GetStateLock();
-  m_motor->control_ref->State(on);
+  m_rumble->controls.front()->control_ref->State(on);
 }
 
 void Wiimote::StepDynamics()
 {
   EmulateSwing(&m_swing_state, m_swing, 1.f / ::Wiimote::UPDATE_FREQ);
   EmulateTilt(&m_tilt_state, m_tilt, 1.f / ::Wiimote::UPDATE_FREQ);
-
-  // TODO: Move cursor state out of ControllerEmu::Cursor
-  // const auto cursor_mtx = EmulateCursorMovement(m_ir);
+  EmulateCursor(&m_cursor_state, m_ir, 1.f / ::Wiimote::UPDATE_FREQ);
+  EmulateShake(&m_shake_state, m_shake, 1.f / ::Wiimote::UPDATE_FREQ);
+  EmulateIMUCursor(&m_imu_cursor_state, m_imu_ir, m_imu_accelerometer, m_imu_gyroscope,
+                   1.f / ::Wiimote::UPDATE_FREQ);
 }
 
-Common::Vec3 Wiimote::GetAcceleration()
+Common::Vec3 Wiimote::GetAcceleration(Common::Vec3 extra_acceleration)
 {
-  // Includes effects of:
-  // IR, Tilt, Swing, Orientation, Shake
+  Common::Vec3 accel = GetOrientation() * GetTransformation().Transform(
+                                              m_swing_state.acceleration + extra_acceleration, 0);
 
-  auto orientation = Common::Matrix33::Identity();
-
-  if (IsSideways())
-    orientation *= Common::Matrix33::RotateZ(float(MathUtil::TAU / -4));
-
-  if (IsUpright())
-    orientation *= Common::Matrix33::RotateX(float(MathUtil::TAU / 4));
-
-  Common::Vec3 accel =
-      orientation *
-      GetTransformation().Transform(
-          m_swing_state.acceleration + Common::Vec3(0, 0, float(GRAVITY_ACCELERATION)), 0);
-
-  DynamicConfiguration shake_config;
-  shake_config.low_intensity = Config::Get(Config::WIIMOTE_INPUT_SHAKE_INTENSITY_SOFT);
-  shake_config.med_intensity = Config::Get(Config::WIIMOTE_INPUT_SHAKE_INTENSITY_MEDIUM);
-  shake_config.high_intensity = Config::Get(Config::WIIMOTE_INPUT_SHAKE_INTENSITY_HARD);
-  shake_config.frames_needed_for_high_intensity =
-      Config::Get(Config::WIIMOTE_INPUT_SHAKE_DYNAMIC_FRAMES_HELD_HARD);
-  shake_config.frames_needed_for_low_intensity =
-      Config::Get(Config::WIIMOTE_INPUT_SHAKE_DYNAMIC_FRAMES_HELD_SOFT);
-  shake_config.frames_to_execute = Config::Get(Config::WIIMOTE_INPUT_SHAKE_DYNAMIC_FRAMES_LENGTH);
-
-  accel += EmulateShake(m_shake, Config::Get(Config::WIIMOTE_INPUT_SHAKE_INTENSITY_MEDIUM),
-                        m_shake_step.data());
-  accel += EmulateShake(m_shake_soft, Config::Get(Config::WIIMOTE_INPUT_SHAKE_INTENSITY_SOFT),
-                        m_shake_soft_step.data());
-  accel += EmulateShake(m_shake_hard, Config::Get(Config::WIIMOTE_INPUT_SHAKE_INTENSITY_HARD),
-                        m_shake_hard_step.data());
-  accel += EmulateDynamicShake(m_shake_dynamic_data, m_shake_dynamic, shake_config,
-                               m_shake_dynamic_step.data());
+  // Our shake effects have never been affected by orientation. Should they be?
+  accel += m_shake_state.acceleration;
 
   return accel;
 }
 
-Common::Matrix44 Wiimote::GetTransformation() const
+Common::Vec3 Wiimote::GetAngularVelocity(Common::Vec3 extra_angular_velocity)
+{
+  return GetOrientation() * (m_tilt_state.angular_velocity + m_swing_state.angular_velocity +
+                             m_cursor_state.angular_velocity + extra_angular_velocity);
+}
+
+Common::Matrix44 Wiimote::GetTransformation(const Common::Matrix33& extra_rotation) const
 {
   // Includes positional and rotational effects of:
-  // IR, Swing, Tilt
+  // Point, Swing, Tilt, Shake
 
-  return Common::Matrix44::FromMatrix33(GetRotationalMatrix(-m_tilt_state.angle) *
-                                        GetRotationalMatrix(-m_swing_state.angle)) *
-         EmulateCursorMovement(m_ir) * Common::Matrix44::Translate(-m_swing_state.position);
+  // TODO: Think about and clean up matrix order + make nunchuk match.
+  return Common::Matrix44::Translate(-m_shake_state.position) *
+         Common::Matrix44::FromMatrix33(
+             extra_rotation * GetRotationalMatrix(-m_tilt_state.angle - m_swing_state.angle -
+                                                  m_cursor_state.angle)) *
+         Common::Matrix44::Translate(-m_swing_state.position - m_cursor_state.position);
+}
+
+Common::Matrix33 Wiimote::GetOrientation() const
+{
+  return Common::Matrix33::RotateZ(float(MathUtil::TAU / -4 * IsSideways())) *
+         Common::Matrix33::RotateX(float(MathUtil::TAU / 4 * IsUpright()));
+}
+
+Common::Vec3 Wiimote::GetTotalAcceleration()
+{
+  auto accel = m_imu_accelerometer->GetState();
+  if (accel.has_value())
+    return GetAcceleration(accel.value());
+  else
+    return GetAcceleration();
+}
+
+Common::Vec3 Wiimote::GetTotalAngularVelocity()
+{
+  auto ang_vel = m_imu_gyroscope->GetState();
+  if (ang_vel.has_value())
+    return GetAngularVelocity(ang_vel.value());
+  else
+    return GetAngularVelocity();
+}
+
+Common::Matrix44 Wiimote::GetTotalTransformation() const
+{
+  return GetTransformation(m_imu_cursor_state.rotation *
+                           Common::Matrix33::RotateX(m_imu_cursor_state.recentered_pitch));
 }
 
 }  // namespace WiimoteEmu

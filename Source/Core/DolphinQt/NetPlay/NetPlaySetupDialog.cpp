@@ -227,6 +227,14 @@ void NetPlaySetupDialog::ConnectWidgets()
   connect(m_host_chunked_upload_limit_box,
           static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this,
           &NetPlaySetupDialog::SaveSettings);
+
+  connect(m_host_server_browser, &QCheckBox::toggled, this, &NetPlaySetupDialog::SaveSettings);
+  connect(m_host_server_name, &QLineEdit::textChanged, this, &NetPlaySetupDialog::SaveSettings);
+  connect(m_host_server_password, &QLineEdit::textChanged, this, &NetPlaySetupDialog::SaveSettings);
+  connect(m_host_server_region,
+          static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+          &NetPlaySetupDialog::SaveSettings);
+
 #ifdef USE_UPNP
   connect(m_host_upnp, &QCheckBox::stateChanged, this, &NetPlaySetupDialog::SaveSettings);
 #endif
@@ -328,6 +336,14 @@ void NetPlaySetupDialog::accept()
       return;
     }
 
+    if (m_host_server_browser->isChecked() &&
+        m_host_server_region->currentData().toString().isEmpty())
+    {
+      ModalMessageBox::critical(this, tr("Error"),
+                                tr("You must provide a region for your session!"));
+      return;
+    }
+
     emit Host(items[0]->text());
   }
 }
@@ -349,10 +365,9 @@ void NetPlaySetupDialog::PopulateGameList()
 
   m_host_games->sortItems();
 
-  QString selected_game = Settings::GetQSettings()
-                              .value(QStringLiteral("netplay/hostgame"), QStringLiteral(""))
-                              .toString();
-  auto find_list = m_host_games->findItems(selected_game, Qt::MatchFlag::MatchExactly);
+  const QString selected_game =
+      Settings::GetQSettings().value(QStringLiteral("netplay/hostgame"), QString{}).toString();
+  const auto find_list = m_host_games->findItems(selected_game, Qt::MatchFlag::MatchExactly);
 
   if (find_list.count() > 0)
     m_host_games->setCurrentItem(find_list[0]);

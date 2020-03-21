@@ -1,4 +1,4 @@
-// Copyright 2008 Dolphin Emulator Project
+﻿// Copyright 2008 Dolphin Emulator Project
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
@@ -31,37 +31,28 @@ using Report = std::vector<u8>;
 constexpr u32 WIIMOTE_DEFAULT_TIMEOUT = 1000;
 
 // Communication channels
-enum WiimoteChannel
-{
-  WC_OUTPUT = 0x11,
-  WC_INPUT = 0x13,
-};
+constexpr u8 WC_OUTPUT = 0x11;
+constexpr u8 WC_INPUT = 0x13;
 
 // The 4 most significant bits of the first byte of an outgoing command must be
 // 0x50 if sending on the command channel and 0xA0 if sending on the interrupt
 // channel. On Mac and Linux we use interrupt channel; on Windows, command.
-enum WiimoteReport
-{
 #ifdef _WIN32
-  WR_SET_REPORT = 0x50
+constexpr u8 WR_SET_REPORT = 0x50;
 #else
-  WR_SET_REPORT = 0xA0
+constexpr u8 WR_SET_REPORT = 0xA0;
 #endif
-};
 
-enum WiimoteBT
-{
-  BT_INPUT = 0x01,
-  BT_OUTPUT = 0x02
-};
+constexpr u8 BT_INPUT = 0x01;
+constexpr u8 BT_OUTPUT = 0x02;
 
 class Wiimote
 {
 public:
   Wiimote(const Wiimote&) = delete;
   Wiimote& operator=(const Wiimote&) = delete;
-  Wiimote(Wiimote&&) = default;
-  Wiimote& operator=(Wiimote&&) = default;
+  Wiimote(Wiimote&&) = delete;
+  Wiimote& operator=(Wiimote&&) = delete;
 
   virtual ~Wiimote() {}
   // This needs to be called in derived destructors!
@@ -74,6 +65,7 @@ public:
   void Update();
   bool CheckForButtonPress();
 
+  bool GetNextReport(Report* report);
   Report& ProcessReadQueue();
 
   void Read();
@@ -110,13 +102,21 @@ public:
 
   void QueueReport(WiimoteCommon::OutputReportID rpt_id, const void* data, unsigned int size);
 
+  template <typename T>
+  void QueueReport(const T& report)
+  {
+    QueueReport(report.REPORT_ID, &report, sizeof(report));
+  }
+
   int GetIndex() const;
 
+  void SetChannel(u16 channel);
+
 protected:
-  Wiimote() = default;
+  Wiimote();
 
   int m_index = 0;
-  Report m_last_input_report = {};
+  Report m_last_input_report;
   u16 m_channel = 0;
 
   // If true, the Wiimote will be really disconnected when it is disconnected by Dolphin.
@@ -182,6 +182,7 @@ public:
 
 private:
   void ThreadFunc();
+  void PoolThreadFunc();
 
   std::vector<std::unique_ptr<WiimoteScannerBackend>> m_backends;
   mutable std::mutex m_backends_mutex;
@@ -192,23 +193,29 @@ private:
   std::atomic<WiimoteScanMode> m_scan_mode{WiimoteScanMode::DO_NOT_SCAN};
 };
 
-extern std::mutex g_wiimotes_mutex;
+// Mutex is recursive as ControllerInterface may call AddWiimoteToPool within ProcessWiimotePool.
+extern std::recursive_mutex g_wiimotes_mutex;
 extern WiimoteScanner g_wiimote_scanner;
 extern std::unique_ptr<Wiimote> g_wiimotes[MAX_BBMOTES];
+
+void AddWiimoteToPool(std::unique_ptr<Wiimote>);
 
 void InterruptChannel(int wiimote_number, u16 channel_id, const void* data, u32 size);
 void ControlChannel(int wiimote_number, u16 channel_id, const void* data, u32 size);
 void Update(int wiimote_number);
 bool CheckForButtonPress(int wiimote_number);
 
-void ChangeWiimoteSource(unsigned int index, int source);
-
 bool IsValidDeviceName(const std::string& name);
 bool IsBalanceBoardName(const std::string& name);
 bool IsNewWiimote(const std::string& identifier);
 
+void HandleWiimoteSourceChange(unsigned int wiimote_number);
+
 #ifdef ANDROID
 void InitAdapterClass();
 #endif
+
+void HandleWiimotesInControllerInterfaceSettingChange();
+void ProcessWiimotePool();
 
 }  // namespace WiimoteReal

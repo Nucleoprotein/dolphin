@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <functional>
 #include <type_traits>
 
 // Tiny matrix/vector library.
@@ -19,6 +20,15 @@ union TVec3
   TVec3() = default;
   TVec3(T _x, T _y, T _z) : data{_x, _y, _z} {}
 
+  template <typename OtherT>
+  explicit TVec3(const TVec3<OtherT>& other) : TVec3(other.x, other.y, other.z)
+  {
+  }
+
+  TVec3 Cross(const TVec3& rhs) const
+  {
+    return {(y * rhs.z) - (rhs.y * z), (z * rhs.x) - (rhs.z * x), (x * rhs.y) - (rhs.x * y)};
+  }
   T Dot(const TVec3& other) const { return x * other.x + y * other.y + z * other.z; }
   T LengthSquared() const { return Dot(*this); }
   T Length() const { return std::sqrt(LengthSquared()); }
@@ -58,6 +68,25 @@ union TVec3
 
   TVec3 operator-() const { return {-x, -y, -z}; }
 
+  // Apply function to each element and return the result.
+  template <typename F>
+  auto Map(F&& f) const -> TVec3<decltype(f(T{}))>
+  {
+    return {f(x), f(y), f(z)};
+  }
+
+  template <typename F, typename T2>
+  auto Map(F&& f, const TVec3<T2>& t) const -> TVec3<decltype(f(T{}, t.x))>
+  {
+    return {f(x, t.x), f(y, t.y), f(z, t.z)};
+  }
+
+  template <typename F, typename T2>
+  auto Map(F&& f, T2 scalar) const -> TVec3<decltype(f(T{}, scalar))>
+  {
+    return {f(x, scalar), f(y, scalar), f(z, scalar)};
+  }
+
   std::array<T, 3> data = {};
 
   struct
@@ -69,39 +98,50 @@ union TVec3
 };
 
 template <typename T>
-TVec3<T> operator+(TVec3<T> lhs, const TVec3<T>& rhs)
+TVec3<bool> operator<(const TVec3<T>& lhs, const TVec3<T>& rhs)
 {
-  return lhs += rhs;
+  return lhs.Map(std::less<T>{}, rhs);
+}
+
+inline TVec3<bool> operator!(const TVec3<bool>& vec)
+{
+  return {!vec.x, !vec.y, !vec.z};
 }
 
 template <typename T>
-TVec3<T> operator-(TVec3<T> lhs, const TVec3<T>& rhs)
+auto operator+(const TVec3<T>& lhs, const TVec3<T>& rhs) -> TVec3<decltype(lhs.x + rhs.x)>
 {
-  return lhs -= rhs;
+  return lhs.Map(std::plus<decltype(lhs.x + rhs.x)>{}, rhs);
 }
 
 template <typename T>
-TVec3<T> operator*(TVec3<T> lhs, const TVec3<T>& rhs)
+auto operator-(const TVec3<T>& lhs, const TVec3<T>& rhs) -> TVec3<decltype(lhs.x - rhs.x)>
 {
-  return lhs *= rhs;
+  return lhs.Map(std::minus<decltype(lhs.x - rhs.x)>{}, rhs);
+}
+
+template <typename T1, typename T2>
+auto operator*(const TVec3<T1>& lhs, const TVec3<T2>& rhs) -> TVec3<decltype(lhs.x * rhs.x)>
+{
+  return lhs.Map(std::multiplies<decltype(lhs.x * rhs.x)>{}, rhs);
 }
 
 template <typename T>
-inline TVec3<T> operator/(TVec3<T> lhs, const TVec3<T>& rhs)
+auto operator/(const TVec3<T>& lhs, const TVec3<T>& rhs) -> TVec3<decltype(lhs.x / rhs.x)>
 {
-  return lhs /= rhs;
+  return lhs.Map(std::divides<decltype(lhs.x / rhs.x)>{}, rhs);
 }
 
-template <typename T>
-TVec3<T> operator*(TVec3<T> lhs, std::common_type_t<T> scalar)
+template <typename T1, typename T2>
+auto operator*(const TVec3<T1>& lhs, T2 scalar) -> TVec3<decltype(lhs.x * scalar)>
 {
-  return lhs *= TVec3<T>{scalar, scalar, scalar};
+  return lhs.Map(std::multiplies<decltype(lhs.x * scalar)>{}, scalar);
 }
 
-template <typename T>
-TVec3<T> operator/(TVec3<T> lhs, std::common_type_t<T> scalar)
+template <typename T1, typename T2>
+auto operator/(const TVec3<T1>& lhs, T2 scalar) -> TVec3<decltype(lhs.x / scalar)>
 {
-  return lhs /= TVec3<T>{scalar, scalar, scalar};
+  return lhs.Map(std::divides<decltype(lhs.x / scalar)>{}, scalar);
 }
 
 using Vec3 = TVec3<float>;
@@ -167,6 +207,11 @@ union TVec2
   TVec2() = default;
   TVec2(T _x, T _y) : data{_x, _y} {}
 
+  template <typename OtherT>
+  explicit TVec2(const TVec2<OtherT>& other) : TVec2(other.x, other.y)
+  {
+  }
+
   T Cross(const TVec2& rhs) const { return (x * rhs.y) - (y * rhs.x); }
   T Dot(const TVec2& rhs) const { return (x * rhs.x) + (y * rhs.y); }
   T LengthSquared() const { return Dot(*this); }
@@ -184,6 +229,20 @@ union TVec2
   {
     x -= rhs.x;
     y -= rhs.y;
+    return *this;
+  }
+
+  TVec2& operator*=(const TVec2& rhs)
+  {
+    x *= rhs.x;
+    y *= rhs.y;
+    return *this;
+  }
+
+  TVec2& operator/=(const TVec2& rhs)
+  {
+    x /= rhs.x;
+    y /= rhs.y;
     return *this;
   }
 
@@ -213,6 +272,17 @@ union TVec2
 };
 
 template <typename T>
+TVec2<bool> operator<(const TVec2<T>& lhs, const TVec2<T>& rhs)
+{
+  return {lhs.x < rhs.x, lhs.y < rhs.y};
+}
+
+inline TVec2<bool> operator!(const TVec2<bool>& vec)
+{
+  return {!vec.x, !vec.y};
+}
+
+template <typename T>
 TVec2<T> operator+(TVec2<T> lhs, const TVec2<T>& rhs)
 {
   return lhs += rhs;
@@ -225,15 +295,27 @@ TVec2<T> operator-(TVec2<T> lhs, const TVec2<T>& rhs)
 }
 
 template <typename T>
-TVec2<T> operator*(TVec2<T> lhs, T scalar)
+TVec2<T> operator*(TVec2<T> lhs, const TVec2<T>& rhs)
 {
-  return lhs *= scalar;
+  return lhs *= rhs;
 }
 
 template <typename T>
-TVec2<T> operator/(TVec2<T> lhs, T scalar)
+TVec2<T> operator/(TVec2<T> lhs, const TVec2<T>& rhs)
 {
-  return lhs /= scalar;
+  return lhs /= rhs;
+}
+
+template <typename T, typename T2>
+auto operator*(TVec2<T> lhs, T2 scalar)
+{
+  return TVec2<decltype(lhs.x * scalar)>(lhs) *= scalar;
+}
+
+template <typename T, typename T2>
+auto operator/(TVec2<T> lhs, T2 scalar)
+{
+  return TVec2<decltype(lhs.x / scalar)>(lhs) /= scalar;
 }
 
 using Vec2 = TVec2<float>;
@@ -243,17 +325,22 @@ class Matrix33
 {
 public:
   static Matrix33 Identity();
+  static Matrix33 FromQuaternion(float x, float y, float z, float w);
 
   // Return a rotation matrix around the x,y,z axis
   static Matrix33 RotateX(float rad);
   static Matrix33 RotateY(float rad);
   static Matrix33 RotateZ(float rad);
 
+  static Matrix33 Rotate(float rad, const Vec3& axis);
+
   static Matrix33 Scale(const Vec3& vec);
 
   // set result = a x b
   static void Multiply(const Matrix33& a, const Matrix33& b, Matrix33* result);
   static void Multiply(const Matrix33& a, const Vec3& vec, Vec3* result);
+
+  Matrix33 Inverted() const;
 
   Matrix33& operator*=(const Matrix33& rhs)
   {

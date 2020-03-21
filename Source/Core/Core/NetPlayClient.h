@@ -46,6 +46,8 @@ public:
   virtual void OnMsgStartGame() = 0;
   virtual void OnMsgStopGame() = 0;
   virtual void OnMsgPowerButton() = 0;
+  virtual void OnPlayerConnect(const std::string& player) = 0;
+  virtual void OnPlayerDisconnect(const std::string& player) = 0;
   virtual void OnPadBufferChanged(u32 buffer) = 0;
   virtual void OnHostInputAuthorityChanged(bool enabled) = 0;
   virtual void OnDesync(u32 frame, const std::string& player) = 0;
@@ -53,7 +55,7 @@ public:
   virtual void OnConnectionError(const std::string& message) = 0;
   virtual void OnTraversalError(TraversalClient::FailureReason error) = 0;
   virtual void OnTraversalStateChanged(TraversalClient::State state) = 0;
-  virtual void OnSaveDataSyncFailure() = 0;
+  virtual void OnGameStartAborted() = 0;
   virtual void OnGolferChanged(bool is_golfer, const std::string& golfer_name) = 0;
 
   virtual bool IsRecording() = 0;
@@ -63,6 +65,9 @@ public:
   virtual void SetMD5Progress(int pid, int progress) = 0;
   virtual void SetMD5Result(int pid, const std::string& result) = 0;
   virtual void AbortMD5() = 0;
+
+  virtual void OnIndexAdded(bool success, std::string error) = 0;
+  virtual void OnIndexRefreshFailed(std::string error) = 0;
 
   virtual void ShowChunkedProgressDialog(const std::string& title, u64 data_size,
                                          const std::vector<int>& players) = 0;

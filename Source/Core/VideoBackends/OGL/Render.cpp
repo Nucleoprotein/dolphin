@@ -144,28 +144,35 @@ static void APIENTRY ClearDepthf(GLfloat depthval)
 
 static void InitDriverInfo()
 {
-  std::string svendor = std::string(g_ogl_config.gl_vendor);
-  std::string srenderer = std::string(g_ogl_config.gl_renderer);
-  std::string sversion = std::string(g_ogl_config.gl_version);
+  const std::string_view svendor(g_ogl_config.gl_vendor);
+  const std::string_view srenderer(g_ogl_config.gl_renderer);
+  const std::string_view sversion(g_ogl_config.gl_version);
   DriverDetails::Vendor vendor = DriverDetails::VENDOR_UNKNOWN;
   DriverDetails::Driver driver = DriverDetails::DRIVER_UNKNOWN;
   DriverDetails::Family family = DriverDetails::Family::UNKNOWN;
   double version = 0.0;
 
   // Get the vendor first
-  if (svendor == "NVIDIA Corporation" && srenderer != "NVIDIA Tegra")
+  if (svendor == "NVIDIA Corporation")
   {
-    vendor = DriverDetails::VENDOR_NVIDIA;
+    if (srenderer != "NVIDIA Tegra")
+    {
+      vendor = DriverDetails::VENDOR_NVIDIA;
+    }
+    else
+    {
+      vendor = DriverDetails::VENDOR_TEGRA;
+    }
   }
   else if (svendor == "ATI Technologies Inc." || svendor == "Advanced Micro Devices, Inc.")
   {
     vendor = DriverDetails::VENDOR_ATI;
   }
-  else if (std::string::npos != sversion.find("Mesa"))
+  else if (sversion.find("Mesa") != std::string::npos)
   {
     vendor = DriverDetails::VENDOR_MESA;
   }
-  else if (std::string::npos != svendor.find("Intel"))
+  else if (svendor.find("Intel") != std::string::npos)
   {
     vendor = DriverDetails::VENDOR_INTEL;
   }
@@ -185,10 +192,6 @@ static void InitDriverInfo()
   else if (svendor == "Imagination Technologies")
   {
     vendor = DriverDetails::VENDOR_IMGTEC;
-  }
-  else if (svendor == "NVIDIA Corporation" && srenderer == "NVIDIA Tegra")
-  {
-    vendor = DriverDetails::VENDOR_TEGRA;
   }
   else if (svendor == "Vivante Corporation")
   {
@@ -238,8 +241,8 @@ static void InitDriverInfo()
       else if (srenderer.find("Ivybridge") != std::string::npos)
         family = DriverDetails::Family::INTEL_IVY;
     }
-    else if (std::string::npos != srenderer.find("AMD") ||
-             std::string::npos != srenderer.find("ATI"))
+    else if (srenderer.find("AMD") != std::string::npos ||
+             srenderer.find("ATI") != std::string::npos)
     {
       driver = DriverDetails::DRIVER_R600;
     }
@@ -350,6 +353,7 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
   }
 
   bool bSuccess = true;
+  bool supports_glsl_cache = false;
 
   g_ogl_config.gl_vendor = (const char*)glGetString(GL_VENDOR);
   g_ogl_config.gl_renderer = (const char*)glGetString(GL_RENDERER);
@@ -466,7 +470,7 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
       GLExtensions::Supports("GL_ARB_gpu_shader5");
 
   g_ogl_config.bIsES = m_main_gl_context->IsGLES();
-  g_ogl_config.bSupportsGLSLCache = GLExtensions::Supports("GL_ARB_get_program_binary");
+  supports_glsl_cache = GLExtensions::Supports("GL_ARB_get_program_binary");
   g_ogl_config.bSupportsGLPinnedMemory = GLExtensions::Supports("GL_AMD_pinned_memory");
   g_ogl_config.bSupportsGLSync = GLExtensions::Supports("GL_ARB_sync");
   g_ogl_config.bSupportsGLBaseVertex = GLExtensions::Supports("GL_ARB_draw_elements_base_vertex") ||
@@ -507,7 +511,7 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
                                                 EsTexbufType::TexbufExt :
                                                 EsTexbufType::TexbufNone;
 
-    g_ogl_config.bSupportsGLSLCache = true;
+    supports_glsl_cache = true;
     g_ogl_config.bSupportsGLSync = true;
 
     // TODO: Implement support for GL_EXT_clip_cull_distance when there is an extension for
@@ -651,6 +655,10 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
 
     // Desktop OpenGL can't have the Android Extension Pack
     g_ogl_config.bSupportsAEP = false;
+
+    // Desktop GL requires GL_PROGRAM_POINT_SIZE set to use gl_PointSize in shaders.
+    // It is implicitly enabled in GLES.
+    glEnable(GL_PROGRAM_POINT_SIZE);
   }
 
   // Either method can do early-z tests. See PixelShaderGen for details.
@@ -675,6 +683,16 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
   g_Config.backend_info.bSupportsBackgroundCompiling =
       !DriverDetails::HasBug(DriverDetails::BUG_SHARED_CONTEXT_SHADER_COMPILATION);
 
+  // Program binaries are supported on GL4.1+, ARB_get_program_binary, or ES3.
+  if (supports_glsl_cache)
+  {
+    // We need to check the number of formats supported. If zero, don't bother getting the binaries.
+    GLint num_formats = 0;
+    glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &num_formats);
+    supports_glsl_cache = num_formats > 0;
+  }
+  g_Config.backend_info.bSupportsPipelineCacheData = supports_glsl_cache;
+
   if (g_ogl_config.bSupportsDebug)
   {
     if (GLExtensions::Supports("GL_KHR_debug"))
@@ -687,7 +705,8 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
       glDebugMessageControlARB(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, true);
       glDebugMessageCallbackARB(ErrorCallback, nullptr);
     }
-    if (LogManager::GetInstance()->IsEnabled(LogTypes::HOST_GPU, LogTypes::LERROR))
+    if (Common::Log::LogManager::GetInstance()->IsEnabled(Common::Log::HOST_GPU,
+                                                          Common::Log::LERROR))
     {
       glEnable(GL_DEBUG_OUTPUT);
     }
@@ -739,7 +758,7 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
            g_ActiveConfig.backend_info.bSupportsPrimitiveRestart ? "" : "PrimitiveRestart ",
            g_ActiveConfig.backend_info.bSupportsEarlyZ ? "" : "EarlyZ ",
            g_ogl_config.bSupportsGLPinnedMemory ? "" : "PinnedMemory ",
-           g_ogl_config.bSupportsGLSLCache ? "" : "ShaderCache ",
+           supports_glsl_cache ? "" : "ShaderCache ",
            g_ogl_config.bSupportsGLBaseVertex ? "" : "BaseVertex ",
            g_ogl_config.bSupportsGLBufferStorage ? "" : "BufferStorage ",
            g_ogl_config.bSupportsGLSync ? "" : "Sync ", g_ogl_config.bSupportsMSAA ? "" : "MSAA ",
@@ -770,7 +789,6 @@ Renderer::Renderer(std::unique_ptr<GLContext> main_gl_context, float backbuffer_
 
   if (g_ActiveConfig.backend_info.bSupportsPrimitiveRestart)
     GLUtil::EnablePrimitiveRestart(m_main_gl_context.get());
-  IndexGenerator::Init();
 
   UpdateActiveConfig();
 }
@@ -817,9 +835,9 @@ std::unique_ptr<AbstractFramebuffer> Renderer::CreateFramebuffer(AbstractTexture
 }
 
 std::unique_ptr<AbstractShader> Renderer::CreateShaderFromSource(ShaderStage stage,
-                                                                 const char* source, size_t length)
+                                                                 std::string_view source)
 {
-  return OGLShader::CreateFromSource(stage, source, length);
+  return OGLShader::CreateFromSource(stage, source);
 }
 
 std::unique_ptr<AbstractShader> Renderer::CreateShaderFromBinary(ShaderStage stage,
@@ -828,9 +846,11 @@ std::unique_ptr<AbstractShader> Renderer::CreateShaderFromBinary(ShaderStage sta
   return nullptr;
 }
 
-std::unique_ptr<AbstractPipeline> Renderer::CreatePipeline(const AbstractPipelineConfig& config)
+std::unique_ptr<AbstractPipeline> Renderer::CreatePipeline(const AbstractPipelineConfig& config,
+                                                           const void* cache_data,
+                                                           size_t cache_data_length)
 {
-  return OGLPipeline::Create(config);
+  return OGLPipeline::Create(config, cache_data, cache_data_length);
 }
 
 void Renderer::SetScissorRect(const MathUtil::Rectangle<int>& rc)
@@ -919,8 +939,8 @@ void Renderer::DispatchComputeShader(const AbstractShader* shader, u32 groups_x,
     glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
 }
 
-void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaEnable, bool zEnable,
-                           u32 color, u32 z)
+void Renderer::ClearScreen(const MathUtil::Rectangle<int>& rc, bool colorEnable, bool alphaEnable,
+                           bool zEnable, u32 color, u32 z)
 {
   g_framebuffer_manager->FlushEFBPokes();
   g_framebuffer_manager->FlagPeekCacheAsOutOfDate();
@@ -961,19 +981,19 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaE
   BPFunctions::SetScissor();
 }
 
-void Renderer::RenderXFBToScreen(const AbstractTexture* texture, const EFBRectangle& rc)
+void Renderer::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
+                                 const AbstractTexture* source_texture,
+                                 const MathUtil::Rectangle<int>& source_rc)
 {
   // Quad-buffered stereo is annoying on GL.
   if (g_ActiveConfig.stereo_mode != StereoMode::QuadBuffer)
-    return ::Renderer::RenderXFBToScreen(texture, rc);
-
-  const auto target_rc = GetTargetRectangle();
+    return ::Renderer::RenderXFBToScreen(target_rc, source_texture, source_rc);
 
   glDrawBuffer(GL_BACK_LEFT);
-  m_post_processor->BlitFromTexture(target_rc, rc, texture, 0);
+  m_post_processor->BlitFromTexture(target_rc, source_rc, source_texture, 0);
 
   glDrawBuffer(GL_BACK_RIGHT);
-  m_post_processor->BlitFromTexture(target_rc, rc, texture, 1);
+  m_post_processor->BlitFromTexture(target_rc, source_rc, source_texture, 1);
 
   glDrawBuffer(GL_BACK);
 }
@@ -1036,10 +1056,15 @@ void Renderer::PresentBackbuffer()
 {
   if (g_ogl_config.bSupportsDebug)
   {
-    if (LogManager::GetInstance()->IsEnabled(LogTypes::HOST_GPU, LogTypes::LERROR))
+    if (Common::Log::LogManager::GetInstance()->IsEnabled(Common::Log::HOST_GPU,
+                                                          Common::Log::LERROR))
+    {
       glEnable(GL_DEBUG_OUTPUT);
+    }
     else
+    {
       glDisable(GL_DEBUG_OUTPUT);
+    }
   }
 
   // Swap the back and front buffers, presenting the image.
@@ -1095,8 +1120,6 @@ void Renderer::CheckForSurfaceResize()
 void Renderer::BeginUtilityDrawing()
 {
   ::Renderer::BeginUtilityDrawing();
-
-  glEnable(GL_PROGRAM_POINT_SIZE);
   if (g_ActiveConfig.backend_info.bSupportsDepthClamp)
   {
     glDisable(GL_CLIP_DISTANCE0);
@@ -1107,8 +1130,6 @@ void Renderer::BeginUtilityDrawing()
 void Renderer::EndUtilityDrawing()
 {
   ::Renderer::EndUtilityDrawing();
-
-  glDisable(GL_PROGRAM_POINT_SIZE);
   if (g_ActiveConfig.backend_info.bSupportsDepthClamp)
   {
     glEnable(GL_CLIP_DISTANCE0);

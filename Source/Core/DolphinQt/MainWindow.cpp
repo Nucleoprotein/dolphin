@@ -30,6 +30,7 @@
 #include <qpa/qplatformnativeinterface.h>
 #endif
 
+#include "Common/ScopeGuard.h"
 #include "Common/Version.h"
 #include "Common/WindowSystemInfo.h"
 
@@ -44,6 +45,7 @@
 #include "Core/HW/GCKeyboard.h"
 #include "Core/HW/GCPad.h"
 #include "Core/HW/ProcessorInterface.h"
+#include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Wiimote.h"
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/HotkeyManager.h"
@@ -83,6 +85,7 @@
 #include "DolphinQt/NetPlay/NetPlayBrowser.h"
 #include "DolphinQt/NetPlay/NetPlayDialog.h"
 #include "DolphinQt/NetPlay/NetPlaySetupDialog.h"
+#include "DolphinQt/QtUtils/FileOpenEventFilter.h"
 #include "DolphinQt/QtUtils/ModalMessageBox.h"
 #include "DolphinQt/QtUtils/QueueOnObject.h"
 #include "DolphinQt/QtUtils/RunOnObject.h"
@@ -112,6 +115,8 @@
 
 #if defined(HAVE_XRANDR) && HAVE_XRANDR
 #include "UICommon/X11Utils.h"
+// This #define within X11/X.h conflicts with our WiimoteSource enum.
+#undef None
 #endif
 
 #if defined(__unix__) || defined(__unix) || defined(__APPLE__)
@@ -157,14 +162,16 @@ static WindowSystemInfo GetWindowSystemInfo(QWindow* window)
 
   // Our Win32 Qt external doesn't have the private API.
 #if defined(WIN32) || defined(__APPLE__)
-  wsi.render_surface = window ? reinterpret_cast<void*>(window->winId()) : nullptr;
+  wsi.render_window = window ? reinterpret_cast<void*>(window->winId()) : nullptr;
+  wsi.render_surface = wsi.render_window;
 #else
   QPlatformNativeInterface* pni = QGuiApplication::platformNativeInterface();
   wsi.display_connection = pni->nativeResourceForWindow("display", window);
   if (wsi.type == WindowSystemType::Wayland)
-    wsi.render_surface = window ? pni->nativeResourceForWindow("surface", window) : nullptr;
+    wsi.render_window = window ? pni->nativeResourceForWindow("surface", window) : nullptr;
   else
-    wsi.render_surface = window ? reinterpret_cast<void*>(window->winId()) : nullptr;
+    wsi.render_window = window ? reinterpret_cast<void*>(window->winId()) : nullptr;
+  wsi.render_surface = wsi.render_window;
 #endif
   wsi.render_surface_scale = window ? static_cast<float>(window->devicePixelRatio()) : 1.0f;
 
@@ -335,6 +342,12 @@ void MainWindow::InitCoreCallbacks()
   });
   installEventFilter(this);
   m_render_widget->installEventFilter(this);
+
+  // Handle file open events
+  auto* filter = new FileOpenEventFilter(QGuiApplication::instance());
+  connect(filter, &FileOpenEventFilter::fileOpened, this, [=](const QString& file_name) {
+    StartGame(BootParameters::GenerateFromFile(file_name.toStdString()));
+  });
 }
 
 static void InstallHotkeyFilter(QWidget* dialog)
@@ -386,6 +399,11 @@ void MainWindow::CreateComponents()
           [this](u32 addr) { m_breakpoint_widget->AddAddressMBP(addr); });
   connect(m_register_widget, &RegisterWidget::RequestMemoryBreakpoint,
           [this](u32 addr) { m_breakpoint_widget->AddAddressMBP(addr); });
+  connect(m_register_widget, &RegisterWidget::RequestViewInMemory, m_memory_widget,
+          [this](u32 addr) { m_memory_widget->SetAddress(addr); });
+  connect(m_register_widget, &RegisterWidget::RequestViewInCode, m_code_widget, [this](u32 addr) {
+    m_code_widget->SetAddress(addr, CodeViewWidget::SetAddressUpdate::WithUpdate);
+  });
 
   connect(m_code_widget, &CodeWidget::BreakpointsChanged, m_breakpoint_widget,
           &BreakpointWidget::Update);
@@ -649,7 +667,7 @@ QStringList MainWindow::PromptFileNames()
   auto& settings = Settings::Instance().GetQSettings();
   QStringList paths = QFileDialog::getOpenFileNames(
       this, tr("Select a File"),
-      settings.value(QStringLiteral("mainwindow/lastdir"), QStringLiteral("")).toString(),
+      settings.value(QStringLiteral("mainwindow/lastdir"), QString{}).toString(),
       tr("All GC/Wii files (*.elf *.dol *.gcm *.iso *.tgc *.wbfs *.ciso *.gcz *.wad *.dff *.m3u);;"
          "All Files (*)"));
 
@@ -672,7 +690,7 @@ void MainWindow::ChangeDisc()
 
 void MainWindow::EjectDisc()
 {
-  Core::RunAsCPUThread(DVDInterface::EjectDisc);
+  Core::RunAsCPUThread([] { DVDInterface::EjectDisc(DVDInterface::EjectCause::User); });
 }
 
 void MainWindow::Open()
@@ -772,6 +790,11 @@ bool MainWindow::RequestStop()
 
   if (SConfig::GetInstance().bConfirmStop)
   {
+    if (std::exchange(m_stop_confirm_showing, true))
+      return true;
+
+    Common::ScopeGuard confirm_lock([this] { m_stop_confirm_showing = false; });
+
     const Core::State state = Core::GetState();
 
     // Only pause the game, if NetPlay is not running
@@ -785,7 +808,8 @@ bool MainWindow::RequestStop()
         m_stop_requested ? tr("A shutdown is already in progress. Unsaved data "
                               "may be lost if you stop the current emulation "
                               "before it completes. Force stop?") :
-                           tr("Do you want to stop the current emulation?"));
+                           tr("Do you want to stop the current emulation?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::NoButton, Qt::ApplicationModal);
 
     if (confirm != QMessageBox::Yes)
     {
@@ -938,20 +962,20 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
     Discord::UpdateDiscordPresence();
 #endif
 
-  if (SConfig::GetInstance().bFullscreen)
+  if (Config::Get(Config::MAIN_FULLSCREEN))
     m_fullscreen_requested = true;
 
 #ifdef Q_OS_WIN
   // Prevents Windows from sleeping, turning off the display, or idling
   EXECUTION_STATE shouldScreenSave =
-      SConfig::GetInstance().bDisableScreenSaver ? ES_DISPLAY_REQUIRED : 0;
+      Config::Get(Config::MAIN_DISABLE_SCREENSAVER) ? ES_DISPLAY_REQUIRED : 0;
   SetThreadExecutionState(ES_CONTINUOUS | shouldScreenSave | ES_SYSTEM_REQUIRED);
 #endif
 }
 
 void MainWindow::SetFullScreenResolution(bool fullscreen)
 {
-  if (SConfig::GetInstance().strFullscreenResolution == "Auto")
+  if (Config::Get(Config::MAIN_FULLSCREEN_DISPLAY_RES) == "Auto")
     return;
 #ifdef _WIN32
 
@@ -964,7 +988,7 @@ void MainWindow::SetFullScreenResolution(bool fullscreen)
   DEVMODE screen_settings;
   memset(&screen_settings, 0, sizeof(screen_settings));
   screen_settings.dmSize = sizeof(screen_settings);
-  sscanf(SConfig::GetInstance().strFullscreenResolution.c_str(), "%dx%d",
+  sscanf(Config::Get(Config::MAIN_FULLSCREEN_DISPLAY_RES).c_str(), "%dx%d",
          &screen_settings.dmPelsWidth, &screen_settings.dmPelsHeight);
   screen_settings.dmBitsPerPel = 32;
   screen_settings.dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
@@ -982,7 +1006,7 @@ void MainWindow::ShowRenderWidget()
   SetFullScreenResolution(false);
   Host::GetInstance()->SetRenderFullscreen(false);
 
-  if (SConfig::GetInstance().bRenderToMain)
+  if (Config::Get(Config::MAIN_RENDER_TO_MAIN))
   {
     // If we're rendering to main, add it to the stack and update our title when necessary.
     m_rendering_to_main = true;
@@ -1175,8 +1199,7 @@ void MainWindow::StateLoadSlot()
 
 void MainWindow::StateSaveSlot()
 {
-  State::Save(m_state_slot, true);
-  m_menu_bar->UpdateStateSlotMenu();
+  State::Save(m_state_slot);
 }
 
 void MainWindow::StateLoadSlotAt(int slot)
@@ -1191,8 +1214,7 @@ void MainWindow::StateLoadLastSavedAt(int slot)
 
 void MainWindow::StateSaveSlotAt(int slot)
 {
-  State::Save(slot, true);
-  m_menu_bar->UpdateStateSlotMenu();
+  State::Save(slot);
 }
 
 void MainWindow::StateLoadUndo()
@@ -1223,8 +1245,8 @@ void MainWindow::SetStateSlot(int slot)
 void MainWindow::PerformOnlineUpdate(const std::string& region)
 {
   WiiUpdate::PerformOnlineUpdate(region, this);
-  // Since the update may have installed a newer system menu, refresh the tools menu.
-  m_menu_bar->UpdateToolsMenu(false);
+  // Since the update may have installed a newer system menu, trigger a refresh.
+  Settings::Instance().NANDRefresh();
 }
 
 void MainWindow::BootWiiSystemMenu()
@@ -1294,7 +1316,8 @@ bool MainWindow::NetPlayJoin()
   const std::string traversal_host = Config::Get(Config::NETPLAY_TRAVERSAL_SERVER);
   const u16 traversal_port = Config::Get(Config::NETPLAY_TRAVERSAL_PORT);
   const std::string nickname = Config::Get(Config::NETPLAY_NICKNAME);
-  const bool host_input_authority = Config::Get(Config::NETPLAY_HOST_INPUT_AUTHORITY);
+  const std::string network_mode = Config::Get(Config::NETPLAY_NETWORK_MODE);
+  const bool host_input_authority = network_mode == "hostinputauthority" || network_mode == "golf";
 
   if (server)
   {
@@ -1314,9 +1337,6 @@ bool MainWindow::NetPlayJoin()
     NetPlayQuit();
     return false;
   }
-
-  if (server != nullptr)
-    server->SetNetPlayUI(m_netplay_dialog);
 
   m_netplay_setup_dialog->close();
   m_netplay_dialog->show(nickname, is_traversal);
@@ -1355,7 +1375,7 @@ bool MainWindow::NetPlayHost(const QString& game_id)
 
   // Create Server
   Settings::Instance().ResetNetPlayServer(new NetPlay::NetPlayServer(
-      host_port, use_upnp,
+      host_port, use_upnp, m_netplay_dialog,
       NetPlay::NetTraversalConfig{is_traversal, traversal_host, traversal_port}));
 
   if (!Settings::Instance().GetNetPlayServer()->is_connected)
@@ -1574,7 +1594,7 @@ void MainWindow::OnStartRecording()
     if (SerialInterface::SIDevice_IsGCController(SConfig::GetInstance().m_SIDevice[i]))
       controllers |= (1 << i);
 
-    if (g_wiimote_sources[i] != WIIMOTE_SRC_NONE)
+    if (WiimoteCommon::GetSource(i) != WiimoteSource::None)
       controllers |= (1 << (i + 4));
   }
 
@@ -1641,7 +1661,7 @@ void MainWindow::ShowTASInput()
 
   for (int i = 0; i < num_wii_controllers; i++)
   {
-    if (g_wiimote_sources[i] == WIIMOTE_SRC_EMU &&
+    if (WiimoteCommon::GetSource(i) == WiimoteSource::Emulated &&
         (!Core::IsRunning() || SConfig::GetInstance().bWii))
     {
       m_wii_tas_input_windows[i]->show();
@@ -1707,7 +1727,8 @@ void MainWindow::OnUpdateProgressDialog(QString title, int progress, int total)
 
 void MainWindow::Show()
 {
-  QWidget::show();
+  if (!Settings::Instance().IsBatchModeEnabled())
+    QWidget::show();
 
   // If the booting of a game was requested on start up, do that now
   if (m_pending_boot != nullptr)

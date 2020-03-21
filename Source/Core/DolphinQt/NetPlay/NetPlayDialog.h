@@ -26,7 +26,6 @@ class QSpinBox;
 class QSplitter;
 class QTableWidget;
 class QTextEdit;
-class QToolButton;
 
 class NetPlayDialog : public QDialog, public NetPlay::NetPlayUI
 {
@@ -50,6 +49,8 @@ public:
   void OnMsgStartGame() override;
   void OnMsgStopGame() override;
   void OnMsgPowerButton() override;
+  void OnPlayerConnect(const std::string& player) override;
+  void OnPlayerDisconnect(const std::string& player) override;
   void OnPadBufferChanged(u32 buffer) override;
   void OnHostInputAuthorityChanged(bool enabled) override;
   void OnDesync(u32 frame, const std::string& player) override;
@@ -57,13 +58,17 @@ public:
   void OnConnectionError(const std::string& message) override;
   void OnTraversalError(TraversalClient::FailureReason error) override;
   void OnTraversalStateChanged(TraversalClient::State state) override;
-  void OnSaveDataSyncFailure() override;
+  void OnGameStartAborted() override;
   void OnGolferChanged(bool is_golfer, const std::string& golfer_name) override;
+
+  void OnIndexAdded(bool success, const std::string error) override;
+  void OnIndexRefreshFailed(const std::string error) override;
 
   bool IsRecording() override;
   std::string FindGame(const std::string& game) override;
   std::shared_ptr<const UICommon::GameFile> FindGameFile(const std::string& game) override;
 
+  void LoadSettings();
   void SaveSettings();
 
   void ShowMD5Dialog(const std::string& file_identifier) override;
@@ -94,8 +99,6 @@ private:
   void GameStatusChanged(bool running);
   void SetOptionsEnabled(bool enabled);
 
-  void SetGame(const QString& game_path);
-
   void SendMessage(const std::string& message);
 
   // Chat
@@ -117,9 +120,9 @@ private:
   QMenuBar* m_menu_bar;
   QMenu* m_data_menu;
   QMenu* m_network_menu;
+  QMenu* m_md5_menu;
   QMenu* m_other_menu;
   QPushButton* m_game_button;
-  QToolButton* m_md5_button;
   QPushButton* m_start_button;
   QLabel* m_buffer_label;
   QSpinBox* m_buffer_size_box;
@@ -128,14 +131,15 @@ private:
   QAction* m_sync_save_data_action;
   QAction* m_sync_codes_action;
   QAction* m_record_input_action;
-  QAction* m_reduce_polling_rate_action;
   QAction* m_strict_settings_sync_action;
   QAction* m_host_input_authority_action;
   QAction* m_sync_all_wii_saves_action;
   QAction* m_golf_mode_action;
   QAction* m_golf_mode_overlay_action;
+  QAction* m_fixed_delay_action;
   QPushButton* m_quit_button;
   QSplitter* m_splitter;
+  QActionGroup* m_network_mode_group;
 
   QGridLayout* m_main_layout;
   MD5Dialog* m_md5_dialog;

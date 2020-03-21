@@ -39,7 +39,8 @@ public:
   void SendChunkedToClients(sf::Packet&& packet, PlayerId skip_pid = 0,
                             const std::string& title = "");
 
-  NetPlayServer(u16 port, bool forward_port, const NetTraversalConfig& traversal_config);
+  NetPlayServer(u16 port, bool forward_port, NetPlayUI* dialog,
+                const NetTraversalConfig& traversal_config);
   ~NetPlayServer();
 
   bool ChangeGame(const std::string& game);
@@ -52,6 +53,7 @@ public:
   bool DoAllPlayersHaveIPLDump() const;
   bool StartGame();
   bool RequestStartGame();
+  void AbortGameStart();
 
   PadMappingArray GetPadMapping() const;
   void SetPadMapping(const PadMappingArray& mappings);
@@ -66,7 +68,6 @@ public:
 
   u16 GetPort() const;
 
-  void SetNetPlayUI(NetPlayUI* dialog);
   std::unordered_set<std::string> GetInterfaceSet() const;
   std::string GetInterfaceHost(const std::string& inter) const;
 
@@ -137,8 +138,9 @@ private:
   std::vector<std::pair<std::string, std::string>> GetInterfaceListInternal() const;
   void ChunkedDataThreadFunc();
   void ChunkedDataSend(sf::Packet&& packet, PlayerId pid, const TargetMode target_mode);
-  void SetupIndex();
+  void ChunkedDataAbort();
 
+  void SetupIndex();
   bool PlayerHasControllerMapped(PlayerId pid) const;
 
   NetSettings m_settings;
@@ -185,6 +187,7 @@ private:
   std::thread m_chunked_data_thread;
   u32 m_next_chunked_data_id;
   std::unordered_map<u32, unsigned int> m_chunked_data_complete_count;
+  bool m_abort_chunked_data = false;
 
   ENetHost* m_server = nullptr;
   TraversalClient* m_traversal_client = nullptr;

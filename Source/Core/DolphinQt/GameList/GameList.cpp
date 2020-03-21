@@ -32,6 +32,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/DVD/DVDInterface.h"
+#include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/WiiSave.h"
 #include "Core/WiiUtils.h"
 
@@ -81,8 +82,8 @@ GameList::GameList(QWidget* parent) : QStackedWidget(parent)
   m_prefer_list = Settings::Instance().GetPreferredView();
   ConsiderViewChange();
 
-  auto* zoom_in = new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_Plus), this);
-  auto* zoom_out = new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_Minus), this);
+  auto* zoom_in = new QShortcut(QKeySequence::ZoomIn, this);
+  auto* zoom_out = new QShortcut(QKeySequence::ZoomOut, this);
 
   connect(zoom_in, &QShortcut::activated, this, &GameList::ZoomIn);
   connect(zoom_out, &QShortcut::activated, this, &GameList::ZoomOut);
@@ -101,6 +102,7 @@ void GameList::MakeListView()
   m_list = new QTableView(this);
   m_list->setModel(m_list_proxy);
 
+  m_list->setTabKeyNavigation(false);
   m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
   m_list->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_list->setAlternatingRowColors(true);
@@ -143,6 +145,7 @@ void GameList::MakeListView()
   hor_header->setSectionResizeMode(GameListModel::COL_COUNTRY, QHeaderView::Fixed);
   hor_header->setSectionResizeMode(GameListModel::COL_SIZE, QHeaderView::Fixed);
   hor_header->setSectionResizeMode(GameListModel::COL_FILE_NAME, QHeaderView::Interactive);
+  hor_header->setSectionResizeMode(GameListModel::COL_FILE_PATH, QHeaderView::Interactive);
   hor_header->setSectionResizeMode(GameListModel::COL_TAGS, QHeaderView::Interactive);
 
   // There's some odd platform-specific behavior with default minimum section size
@@ -186,6 +189,8 @@ void GameList::UpdateColumnVisibility()
   m_list->setColumnHidden(GameListModel::COL_SIZE, !SConfig::GetInstance().m_showSizeColumn);
   m_list->setColumnHidden(GameListModel::COL_FILE_NAME,
                           !SConfig::GetInstance().m_showFileNameColumn);
+  m_list->setColumnHidden(GameListModel::COL_FILE_PATH,
+                          !SConfig::GetInstance().m_showFilePathColumn);
   m_list->setColumnHidden(GameListModel::COL_TAGS, !SConfig::GetInstance().m_showTagsColumn);
 }
 
@@ -281,7 +286,7 @@ void GameList::ShowContextMenu(const QPoint&)
 
     if (wii_saves)
     {
-      menu->addAction(tr("Export Wii Saves (Experimental)"), this, &GameList::ExportWiiSave);
+      menu->addAction(tr("Export Wii Saves"), this, &GameList::ExportWiiSave);
       menu->addSeparator();
     }
 
@@ -322,8 +327,11 @@ void GameList::ShowContextMenu(const QPoint&)
     if (platform == DiscIO::Platform::WiiDisc)
     {
       auto* perform_disc_update = menu->addAction(tr("Perform System Update"), this,
-                                                  [ this, file_path = game->GetFilePath() ] {
+                                                  [this, file_path = game->GetFilePath()] {
                                                     WiiUpdate::PerformDiscUpdate(file_path, this);
+                                                    // Since the update may have installed a newer
+                                                    // system menu, trigger a refresh.
+                                                    Settings::Instance().NANDRefresh();
                                                   });
       perform_disc_update->setEnabled(!Core::IsRunning() || !SConfig::GetInstance().bWii);
     }
@@ -357,7 +365,7 @@ void GameList::ShowContextMenu(const QPoint&)
     if (platform == DiscIO::Platform::WiiWAD || platform == DiscIO::Platform::WiiDisc)
     {
       menu->addAction(tr("Open Wii &Save Folder"), this, &GameList::OpenWiiSaveFolder);
-      menu->addAction(tr("Export Wii Save (Experimental)"), this, &GameList::ExportWiiSave);
+      menu->addAction(tr("Export Wii Save"), this, &GameList::ExportWiiSave);
       menu->addSeparator();
     }
 
@@ -441,14 +449,14 @@ void GameList::ExportWiiSave()
   for (const auto& game : GetSelectedGames())
   {
     if (!WiiSave::Export(game->GetTitleID(), export_dir.toStdString()))
-      failed.push_back(game->GetName());
+      failed.push_back(game->GetName(UICommon::GameFile::Variant::LongAndPossiblyCustom));
   }
 
   if (!failed.isEmpty())
   {
     QString failed_str;
     for (const std::string& str : failed)
-      failed_str.append(QStringLiteral("\n")).append(QString::fromStdString(str));
+      failed_str.append(QLatin1Char{'\n'}).append(QString::fromStdString(str));
     ModalMessageBox::critical(this, tr("Save Export"),
                               tr("Failed to export the following save files:") + failed_str);
   }
@@ -578,7 +586,7 @@ void GameList::CompressISO(bool decompress)
     if (decompress)
     {
       if (files.size() > 1)
-        progress_dialog.setLabelText(tr("Decompressing...") + QStringLiteral("\n") +
+        progress_dialog.setLabelText(tr("Decompressing...") + QLatin1Char{'\n'} +
                                      QFileInfo(QString::fromStdString(original_path)).fileName());
       good = DiscIO::DecompressBlobToFile(original_path, dst_path.toStdString(), &CompressCB,
                                           &progress_dialog);
@@ -586,7 +594,7 @@ void GameList::CompressISO(bool decompress)
     else
     {
       if (files.size() > 1)
-        progress_dialog.setLabelText(tr("Compressing...") + QStringLiteral("\n") +
+        progress_dialog.setLabelText(tr("Compressing...") + QLatin1Char{'\n'} +
                                      QFileInfo(QString::fromStdString(original_path)).fileName());
       good = DiscIO::CompressFileToBlob(original_path, dst_path.toStdString(),
                                         file->GetPlatform() == DiscIO::Platform::WiiDisc ? 1 : 0,
@@ -906,6 +914,7 @@ void GameList::OnColumnVisibilityToggled(const QString& row, bool visible)
       {tr("Description"), GameListModel::COL_DESCRIPTION},
       {tr("Maker"), GameListModel::COL_MAKER},
       {tr("File Name"), GameListModel::COL_FILE_NAME},
+      {tr("File Path"), GameListModel::COL_FILE_PATH},
       {tr("Game ID"), GameListModel::COL_ID},
       {tr("Region"), GameListModel::COL_COUNTRY},
       {tr("File Size"), GameListModel::COL_SIZE},
