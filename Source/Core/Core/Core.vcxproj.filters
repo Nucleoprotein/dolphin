@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="ActionReplay">
@@ -463,9 +463,6 @@
     <ClCompile Include="HW\EXI\EXI_DeviceMic.cpp">
       <Filter>HW %28Flipper/Hollywood%29\EXI - Expansion Interface</Filter>
     </ClCompile>
-    <ClCompile Include="HW\EXI\BBA-TAP\TAP_Win32.cpp">
-      <Filter>HW %28Flipper/Hollywood%29\EXI - Expansion Interface</Filter>
-    </ClCompile>
     <ClCompile Include="HW\Sram.cpp">
       <Filter>HW %28Flipper/Hollywood%29\EXI - Expansion Interface</Filter>
     </ClCompile>
@@ -479,6 +476,9 @@
       <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
     </ClCompile>
     <ClCompile Include="HW\GCMemcard\GCMemcardRaw.cpp">
+      <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
+    </ClCompile>
+    <ClCompile Include="HW\GCMemcard\GCMemcardUtils.cpp">
       <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
     </ClCompile>
     <ClCompile Include="HW\GCPad.cpp">
@@ -993,6 +993,8 @@
     <ClCompile Include="PowerPC\Jit64\RegCache\FPURegCache.cpp">
       <Filter>PowerPC\Jit64</Filter>
     </ClCompile>
+    <ClCompile Include="HW\EXI\BBA\TAP_Win32.cpp" />
+    <ClCompile Include="HW\EXI\BBA\XLINK_KAI_BBA.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="BootManager.h" />
@@ -1233,9 +1235,6 @@
     <ClInclude Include="HW\EXI\EXI_DeviceMic.h">
       <Filter>HW %28Flipper/Hollywood%29\EXI - Expansion Interface</Filter>
     </ClInclude>
-    <ClInclude Include="HW\EXI\BBA-TAP\TAP_Win32.h">
-      <Filter>HW %28Flipper/Hollywood%29\EXI - Expansion Interface</Filter>
-    </ClInclude>
     <ClInclude Include="HW\Sram.h">
       <Filter>HW %28Flipper/Hollywood%29\EXI - Expansion Interface</Filter>
     </ClInclude>
@@ -1245,10 +1244,16 @@
     <ClInclude Include="HW\GCMemcard\GCMemcard.h">
       <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
     </ClInclude>
+    <ClInclude Include="HW\GCMemcard\GCMemcardBase.h">
+      <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
+    </ClInclude>
     <ClInclude Include="HW\GCMemcard\GCMemcardDirectory.h">
       <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
     </ClInclude>
     <ClInclude Include="HW\GCMemcard\GCMemcardRaw.h">
+      <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
+    </ClInclude>
+    <ClInclude Include="HW\GCMemcard\GCMemcardUtils.h">
       <Filter>HW %28Flipper/Hollywood%29\GCMemcard</Filter>
     </ClInclude>
     <ClInclude Include="HW\GCPadEmu.h">
@@ -1740,6 +1745,7 @@
     <ClInclude Include="PowerPC\JitArmCommon\BackPatch.h">
       <Filter>PowerPC\JitArmCommon</Filter>
     </ClInclude>
+    <ClInclude Include="HW\EXI\BBA\TAP_Win32.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />

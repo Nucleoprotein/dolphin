@@ -24,6 +24,7 @@
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/SI/SI.h"
 #include "Core/HW/SystemTimers.h"
+#include "Core/Movie.h"
 
 #include "DiscIO/Enums.h"
 
@@ -59,7 +60,9 @@ static UVIBorderBlankRegister m_BorderHBlank;
 // 0xcc002076 - 0xcc00207f is full of 0x00FF: unknown
 // 0xcc002080 - 0xcc002100 even more unknown
 
-static u32 s_target_refresh_rate = 0;
+static double s_target_refresh_rate = 0;
+static u32 s_target_refresh_rate_numerator = 0;
+static u32 s_target_refresh_rate_denominator = 1;
 
 static constexpr std::array<u32, 2> s_clock_freqs{{
     27000000,
@@ -101,14 +104,11 @@ void DoState(PointerWrap& p)
   p.Do(m_DTVStatus);
   p.Do(m_FBWidth);
   p.Do(m_BorderHBlank);
-  p.Do(s_target_refresh_rate);
   p.Do(s_ticks_last_line_start);
   p.Do(s_half_line_count);
   p.Do(s_half_line_of_next_si_poll);
-  p.Do(s_even_field_first_hl);
-  p.Do(s_odd_field_first_hl);
-  p.Do(s_even_field_last_hl);
-  p.Do(s_odd_field_last_hl);
+
+  UpdateParameters();
 }
 
 // Executed after Init, before game boot
@@ -697,13 +697,25 @@ void UpdateParameters()
   s_even_field_first_hl = equ_hl + m_VBlankTimingEven.PRB + GetHalfLinesPerOddField();
   s_even_field_last_hl = s_even_field_first_hl + acv_hl - 1;
 
-  s_target_refresh_rate = lround(2.0 * SystemTimers::GetTicksPerSecond() /
-                                 (GetTicksPerEvenField() + GetTicksPerOddField()));
+  s_target_refresh_rate_numerator = SystemTimers::GetTicksPerSecond() * 2;
+  s_target_refresh_rate_denominator = GetTicksPerEvenField() + GetTicksPerOddField();
+  s_target_refresh_rate =
+      static_cast<double>(s_target_refresh_rate_numerator) / s_target_refresh_rate_denominator;
 }
 
-u32 GetTargetRefreshRate()
+double GetTargetRefreshRate()
 {
   return s_target_refresh_rate;
+}
+
+u32 GetTargetRefreshRateNumerator()
+{
+  return s_target_refresh_rate_numerator;
+}
+
+u32 GetTargetRefreshRateDenominator()
+{
+  return s_target_refresh_rate_denominator;
 }
 
 u32 GetTicksPerSample()
@@ -816,32 +828,11 @@ static void EndField()
 // Run when: When a frame is scanned (progressive/interlace)
 void Update(u64 ticks)
 {
-  // If this half-line is at a field boundary, potentially deal with frame-stepping
-  // and/or update movie state before dealing with anything else
+  // Movie's frame counter should be updated before actually rendering the frame,
+  // in case frame counter display is enabled
 
   if (s_half_line_count == 0 || s_half_line_count == GetHalfLinesPerEvenField())
-    Core::FrameUpdate();
-
-  // If an SI poll is scheduled to happen on this half-line, do it!
-
-  if (s_half_line_of_next_si_poll == s_half_line_count)
-  {
-    Core::UpdateInputGate(!SConfig::GetInstance().m_BackgroundInput);
-    SerialInterface::UpdateDevices();
-    s_half_line_of_next_si_poll += 2 * SerialInterface::GetPollXLines();
-  }
-
-  // If this half-line is at the actual boundary of either field, schedule an SI poll to happen
-  // some number of half-lines in the future
-
-  if (s_half_line_count == 0)
-  {
-    s_half_line_of_next_si_poll = num_half_lines_for_si_poll;  // first results start at vsync
-  }
-  if (s_half_line_count == GetHalfLinesPerEvenField())
-  {
-    s_half_line_of_next_si_poll = GetHalfLinesPerEvenField() + num_half_lines_for_si_poll;
-  }
+    Movie::FrameUpdate();
 
   // If this half-line is at some boundary of the "active video lines" in either field, we either
   // need to (a) send a request to the GPU thread to actually render the XFB, or (b) increment
@@ -862,6 +853,33 @@ void Update(u64 ticks)
   else if (s_half_line_count == s_odd_field_last_hl)
   {
     EndField();
+  }
+
+  // If this half-line is at a field boundary, deal with frame stepping before potentially
+  // dealing with SI polls, but after potentially sending a swap request to the GPU thread
+
+  if (s_half_line_count == 0 || s_half_line_count == GetHalfLinesPerEvenField())
+    Core::Callback_NewField();
+
+  // If an SI poll is scheduled to happen on this half-line, do it!
+
+  if (s_half_line_of_next_si_poll == s_half_line_count)
+  {
+    Core::UpdateInputGate(!SConfig::GetInstance().m_BackgroundInput);
+    SerialInterface::UpdateDevices();
+    s_half_line_of_next_si_poll += 2 * SerialInterface::GetPollXLines();
+  }
+
+  // If this half-line is at the actual boundary of either field, schedule an SI poll to happen
+  // some number of half-lines in the future
+
+  if (s_half_line_count == 0)
+  {
+    s_half_line_of_next_si_poll = num_half_lines_for_si_poll;  // first results start at vsync
+  }
+  if (s_half_line_count == GetHalfLinesPerEvenField())
+  {
+    s_half_line_of_next_si_poll = GetHalfLinesPerEvenField() + num_half_lines_for_si_poll;
   }
 
   // Move to the next half-line and potentially roll-over the count to zero. If we've reached

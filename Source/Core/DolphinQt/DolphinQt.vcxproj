@@ -23,6 +23,7 @@
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <ProjectName>Dolphin</ProjectName>
   </PropertyGroup>
+  <Import Project="..\..\VSProps\Microsoft.VCToolsVersion.14.25.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -35,6 +36,7 @@
   <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
     <UseDebugLibraries>false</UseDebugLibraries>
   </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -131,6 +133,7 @@
     <QtMoc Include="Config\PropertiesDialog.h" />
     <QtMoc Include="Config\SettingsWindow.h" />
     <QtMoc Include="Config\VerifyWidget.h" />
+    <QtMoc Include="ConvertDialog.h" />
     <QtMoc Include="DiscordHandler.h" />
     <QtMoc Include="DiscordJoinRequestDialog.h" />
     <QtMoc Include="FIFO\FIFOAnalyzer.h" />
@@ -147,10 +150,13 @@
     <QtMoc Include="Debugger\JITWidget.h" />
     <QtMoc Include="Debugger\MemoryWidget.h" />
     <QtMoc Include="Debugger\MemoryViewWidget.h" />
+    <QtMoc Include="Debugger\NetworkWidget.h" />
     <QtMoc Include="Debugger\NewBreakpointDialog.h" />
     <QtMoc Include="Debugger\PatchInstructionDialog.h" />
     <QtMoc Include="Debugger\RegisterWidget.h" />
+    <QtMoc Include="Debugger\ThreadWidget.h" />
     <QtMoc Include="Debugger\WatchWidget.h" />
+    <QtMoc Include="GCMemcardCreateNewDialog.h" />
     <QtMoc Include="GCMemcardManager.h" />
     <QtMoc Include="GameList\GameList.h" />
     <QtMoc Include="GameList\GameListModel.h" />
@@ -181,6 +187,8 @@
     <QtMoc Include="QtUtils\FileOpenEventFilter.h" />
     <QtMoc Include="QtUtils\FlowLayout.h" />
     <QtMoc Include="QtUtils\ModalMessageBox.h" />
+    <QtMoc Include="QtUtils\ParallelProgressDialog.h" />
+    <QtMoc Include="QtUtils\UTF8CodePointCountValidator.h" />
     <QtMoc Include="QtUtils\WindowActivationEventFilter.h" />
     <QtMoc Include="QtUtils\WrapInScrollArea.h" />
     <QtMoc Include="RenderWidget.h" />
@@ -210,6 +218,7 @@
     <ClCompile Include="$(QtMocOutPrefix)DualShockUDPClientWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)ControllerInterfaceWindow.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)ControllersWindow.cpp" />
+    <ClCompile Include="$(QtMocOutPrefix)ConvertDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)DiscordHandler.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)DiscordJoinRequestDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)DoubleClickEventFilter.cpp" />
@@ -221,6 +230,7 @@
     <ClCompile Include="$(QtMocOutPrefix)FileOpenEventFilter.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)FilesystemWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)GCKeyboardEmu.cpp" />
+    <ClCompile Include="$(QtMocOutPrefix)GCMemcardCreateNewDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)GCMemcardManager.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)GCMicrophone.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)GCPadEmu.cpp" />
@@ -274,6 +284,7 @@
     <ClCompile Include="$(QtMocOutPrefix)MappingWindow.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)MemoryViewWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)MemoryWidget.cpp" />
+    <ClCompile Include="$(QtMocOutPrefix)NetworkWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)MenuBar.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)ModalMessageBox.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)NetPlayBrowser.cpp" />
@@ -282,12 +293,15 @@
     <ClCompile Include="$(QtMocOutPrefix)NewBreakpointDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)NewPatchDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)PadMappingDialog.cpp" />
+    <ClCompile Include="$(QtMocOutPrefix)ParallelProgressDialog.cpp" />
+    <ClCompile Include="$(QtMocOutPrefix)UTF8CodePointCountValidator.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)PatchesWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)PatchInstructionDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)PathPane.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)PostProcessingConfigWindow.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)PropertiesDialog.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)RegisterWidget.cpp" />
+    <ClCompile Include="$(QtMocOutPrefix)ThreadWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)RenderWidget.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)SearchBar.cpp" />
     <ClCompile Include="$(QtMocOutPrefix)Settings.cpp" />
@@ -370,11 +384,14 @@
     <ClCompile Include="Config\PropertiesDialog.cpp" />
     <ClCompile Include="Config\SettingsWindow.cpp" />
     <ClCompile Include="Config\VerifyWidget.cpp" />
+    <ClCompile Include="ConvertDialog.cpp" />
     <ClCompile Include="Debugger\CodeViewWidget.cpp" />
     <ClCompile Include="Debugger\CodeWidget.cpp" />
     <ClCompile Include="Debugger\JITWidget.cpp" />
     <ClCompile Include="Debugger\MemoryWidget.cpp" />
     <ClCompile Include="Debugger\MemoryViewWidget.cpp" />
+    <ClCompile Include="Debugger\NetworkWidget.cpp" />
+    <ClCompile Include="Debugger\ThreadWidget.cpp" />
     <ClCompile Include="DiscordHandler.cpp" />
     <ClCompile Include="DiscordJoinRequestDialog.cpp" />
     <ClCompile Include="FIFO\FIFOAnalyzer.cpp" />
@@ -393,6 +410,7 @@
     <ClCompile Include="Debugger\RegisterColumn.cpp" />
     <ClCompile Include="Debugger\RegisterWidget.cpp" />
     <ClCompile Include="Debugger\WatchWidget.cpp" />
+    <ClCompile Include="GCMemcardCreateNewDialog.cpp" />
     <ClCompile Include="GCMemcardManager.cpp" />
     <ClCompile Include="GameList\GameList.cpp" />
     <ClCompile Include="GameList\GameListModel.cpp" />
@@ -419,6 +437,7 @@
     <ClCompile Include="QtUtils\FlowLayout.cpp" />
     <ClCompile Include="QtUtils\ImageConverter.cpp" />
     <ClCompile Include="QtUtils\ModalMessageBox.cpp" />
+    <ClCompile Include="QtUtils\UTF8CodePointCountValidator.cpp" />
     <ClCompile Include="QtUtils\WindowActivationEventFilter.cpp" />
     <ClCompile Include="QtUtils\WrapInScrollArea.cpp" />
     <ClCompile Include="RenderWidget.cpp" />

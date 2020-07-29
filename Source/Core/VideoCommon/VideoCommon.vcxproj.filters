@@ -209,6 +209,7 @@
     <ClCompile Include="VertexLoaderARM64.cpp">
       <Filter>Vertex Loading</Filter>
     </ClCompile>
+    <ClCompile Include="FreeLookCamera.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CommandProcessor.h" />
@@ -407,6 +408,7 @@
     <ClInclude Include="VertexLoaderARM64.h">
       <Filter>Vertex Loading</Filter>
     </ClInclude>
+    <ClInclude Include="FreeLookCamera.h" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="CMakeLists.txt" />
